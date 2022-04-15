@@ -47,7 +47,8 @@ The material in the `examples` folder should be studied last. It contains six sa
 * `wide-multiplication`: Implements multiplication of two 128-bit unsigned integers in approximately 100 lines of CSL.
 * `FFT`: Implements 1D and 2D Discrete Fourier Transforms, DFT in 400+ lines of CSL.
 * `residual`: Computes the norm of the residual of  a matrix-vector multiplication. Builds on GEMV. Approximately 500 lines of CSL.
-* `histogram-torus`: TODO
+* `histogram-torus`: A communication demo. The fabric memory is filled with random values which are then sorted into buckets, 
+  where each bucket is a single processing element of the WSE.
 * `stencil`: A 3D 25-point stencil implemented in a little less than 700 lines of CSL.
 
 
