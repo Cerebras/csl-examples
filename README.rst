@@ -15,20 +15,8 @@ Each example is located in its own sub-folder, and contains files of the followi
 * `commands.sh`: Shell script which contains the exact commands you need to execute to first compile the source code and then simulate it.
 * `\*.rst`: Documentation. 
 
-The examples are divided into three main categories, introduction, tutorials and examples, described in the following sections.
+The examples are divided into two main categories, tutorials and examples, described in the following sections.
 
-Introduction
----------
-The `introduction` folder is the place to start. It contains five examples which serves as a first introduction to the core concepts
-of the CSL language. We recommend working through these examples in the following order:
-
-#. first-example
-#. tensors-and-multicore
-#. routes-and-wavelets
-#. data-structure-descriptors
-#. fabric-switches
-
-The above examples are documented on the `SDK Documentation website <https://sdk.cerebras.net>`_ and not in `\*.rst` files.
 
 Tutorials
 ------
@@ -51,7 +39,10 @@ The material in the `examples` folder should be studied last. It contains six sa
   where each bucket is a single processing element of the WSE.
 * `stencil`: A 3D 25-point stencil implemented in a little less than 700 lines of CSL.
 
+End User License Agreement
+----
 
+The End User Software License Agreement (EULA) is available `here <https://cerebras.net/wp-content/uploads/2021/10/cerebras-software-eula.pdf>`_.
 
 
 
