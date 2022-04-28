@@ -51,7 +51,10 @@ The material in the `examples` folder should be studied last. It contains six sa
   where each bucket is a single processing element of the WSE.
 * `stencil`: A 3D 25-point stencil implemented in a little less than 700 lines of CSL.
 
+End User License Agreement
+----
 
+The End User Software License Agreement (EULA) is available `here <https://cerebras.net/wp-content/uploads/2021/10/cerebras-software-eula.pdf>`_.
 
 
 
