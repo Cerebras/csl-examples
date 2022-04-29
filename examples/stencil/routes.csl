@@ -45,7 +45,7 @@ fn computeTxDir(dir: direction, isLast: bool) comptime_struct {
   return .{ RAMP };
 }
 
-// The route when using a single neibhbor is quite different from the route for
+// The route when using a single neighbor is quite different from the route for
 // non-unit neighbors.  The next two functions compute routes for these two
 // cases.
 fn twoPatternRoute(dir: direction, pattFirst: bool, pattLast: bool,

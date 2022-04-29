@@ -3,7 +3,7 @@ Initializers
 ============
 
 In CSL, all declared variables, global or otherwise, have to be initialized.
-Such intializations can be cumbersome when declaring large arrays, so the
+Such initializations can be cumbersome when declaring large arrays, so the
 compiler provides two builtins ``@zeros()`` and ``@constants()`` for generating
 tensors of various dimensions and sizes.
 

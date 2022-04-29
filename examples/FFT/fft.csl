@@ -26,7 +26,7 @@ var Xaux = @zeros([N]tensor_type);
 const reshape_x   = @import_module("reshape.csl", .{ .N=N, .FP=FP, .tensor_type=tensor_type, .SRC_SIZE = ARRAY_LEN, .DST_SIZE = ARRAY_LEN, .src=X, .dest=X });
 const reshape_aux = @import_module("reshape.csl", .{ .N=N, .FP=FP, .tensor_type=tensor_type, .SRC_SIZE = N,         .DST_SIZE = ARRAY_LEN, .src=&Xaux, .dest=X});
 
-// DSD to move data from the upper part of X, and the auxiliar array of size half of the size of X
+// DSD to move data from the upper part of X, and the auxiliary array of size half of the size of X
 // Bear in mind that X is size 2*N, so X_even_dsd is just accessing the lower part of X
 const Xaux_dsd   = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> Xaux[i] });
 const Xaux_stride2_dsd   = @set_dsd_stride(Xaux_dsd, 2);

@@ -41,7 +41,7 @@ output_color = 1
 output_port_map = f"{{out_tensor[idx=0:3] -> [PE[idx,-1] -> index[idx]]}}"
 runner.add_output_tensor(output_color, output_port_map, np.int16)
 
-# Procced with simulation; fetch the output wavelets once simulation completes
+# Proceed with simulation; fetch the output wavelets once simulation completes
 runner.connect_and_run(sim_out_path)
 result_tensor = runner.out_tensor_dict["out_tensor"]
 

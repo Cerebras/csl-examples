@@ -102,7 +102,6 @@ fn sgemv_outer( m: i16, n: i16, alpha: f32,  A: *[sizeA]f32,  lda: i16, x: *[siz
     // bind vector y to a DSD
     // it is based on mem_Ax_buf_dsd, so no need to set the length again
     var mem_y_buf_dsd = @set_dsd_base_addr(mem_Ax_buf_dsd, y);
-    //mem_y_buf_dsd = @set_dsd_length(mem_y_buf_dsd, @bitcast(u16, m) );
 
     // Ax = 0
     var zero : f32 = @as(f32, 0);
@@ -116,7 +115,6 @@ fn sgemv_outer( m: i16, n: i16, alpha: f32,  A: *[sizeA]f32,  lda: i16, x: *[siz
         // it is based on mem_Ax_buf_dsd, so no need to set the length again
         var mem_w_buf_dsd = @set_dsd_base_addr(mem_Ax_buf_dsd, A);
         mem_w_buf_dsd = @increment_dsd_offset(mem_w_buf_dsd, col * lda, f32);
-        //mem_w_buf_dsd = @set_dsd_length(mem_w_buf_dsd, @bitcast(u16, m) );
         @fmacs(mem_Ax_buf_dsd, mem_Ax_buf_dsd, mem_w_buf_dsd, xj);
     }
 

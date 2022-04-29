@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# 1D:
-# 2D:
 
 import argparse
 import json
@@ -109,7 +107,7 @@ f[1::2] = fI
 # Set the seed so that CI results are deterministic
 np.random.seed(seed=7)
 
-# Create Random array if CHECK_RES set, or arange a fixed array if not
+# Create Random array if CHECK_RES set, or a fixed array if not
 if CHECK_RES == 1:
   random_array = np.random.random(GLOBAL_TENSOR_ELEM).astype(precision_type)
 else:
