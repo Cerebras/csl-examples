@@ -49,9 +49,9 @@ const TO:direction = flip(FROM);
 // 'c1' and 'c2' alternate to pass data from FROM to TO.
 // 'c3' and 'c4' alternate to pass data from TO to FROM.
 //
-// PE 0 always recieves c4 from TO and sends on c1 to TO.
+// PE 0 always receives c4 from TO and sends on c1 to TO.
 //
-// The last PE always recieves from FROM and sends to FROM. The colors it uses
+// The last PE always receives from FROM and sends to FROM. The colors it uses
 // depends on how many PEs there are in the ring.
 //
 // The PEs in between alternate.

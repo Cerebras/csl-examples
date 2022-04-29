@@ -57,7 +57,7 @@ On odd-numbered PEs 'c1' and 'c2' alternate to pass data east to west.
 On even-numbered PEs 'c3' and 'c4' alternate to pass data west to east.
 
 The first and last PEs on each route are special:
-- PE 0 always recieves on c4 and sends on c1, switching directions.
+- PE 0 always receives on c4 and sends on c1, switching directions.
 - The last PE also switches directions, but the colors it uses
 depends on how many PEs there are in the ring.
 
