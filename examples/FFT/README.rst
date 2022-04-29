@@ -24,7 +24,7 @@ The 1D and 2D FFT CSL implementations share the following characteristics:
 
 The 1D implementation uses a single PE only. The core of the computation is in the file `fft.csl`.
 The index reordering of the input `X` tensor, i.e., the bit-reversed indexing scheme used with
-the butterfly structure, is implemented by maintaining an auxillary tensor which in each major
+the butterfly structure, is implemented by maintaining an auxiliary tensor which in each major
 step insures that all even-indexed elements are in the lower half and all odd-indexed elements
 are in the upper half, i.e., even and odd elements are contiguous.
 
