@@ -31,10 +31,10 @@ fn snrminf( n: i16, x: *[sizeX]f32, result: *f32 ) void {
     var row : i16 = 0;
     while(row < n) : (row +=1) {
         var yi : f32 = (x.*)[row];
-        if ( zero > yi ){
+        if ( zero > yi ) {
             yi = -yi;
         }
-        if ( nrm_r < yi ){
+        if ( nrm_r < yi ) {
             nrm_r = yi;
         }
     }
