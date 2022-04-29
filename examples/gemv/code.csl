@@ -1,0 +1,110 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This does y = Ax + b (A is 32x16) on a 4x4 rectangle of PEs
+
+param x_in: color;     // color for input x to the kernel from NORTH
+param sentinel: color; // sentinel color for x
+param b_in: color;     // color for input b to the kernel from WEST
+param y_out: color;    // color for output Y from kernel to EAST
+
+param Ax_out: color;
+
+var A = @zeros([8, 4]f16);
+var Ax_temp = @zeros([8]f16);
+
+const dsd_A       = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{8} -> A[i, 0], .wavelet_index_offset = 1});
+const dsd_Ax_temp = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{8} -> Ax_temp[i]});
+const in  = @get_dsd(fabin_dsd,  .{.fabric_color = b_in,   .extent = 8});
+const out = @get_dsd(fabout_dsd, .{.fabric_color = Ax_out, .extent = 8});
+
+task rx_x_task(wlet_data : f16, idx : i16) void {
+  /// NOTE: this is implicitly using `idx` (because `dsd_A` has the WAVELET_INDEX_OFFSET field set);
+  @fmach(dsd_Ax_temp, dsd_Ax_temp, dsd_A, wlet_data);
+}
+
+task sentinel_task() void {
+  @faddh(out, in, dsd_Ax_temp);
+}
+
+comptime {
+  @bind_task(rx_x_task, x_in);
+  @bind_task(sentinel_task, sentinel);
+  @block(b_in);
+}
+
+layout {
+  @set_rectangle(4, 4);
+
+  /// Color Values
+
+  const same_colors = .{.x_in=x_in, .b_in = b_in,   .y_out=y_out, .Ax_out = Ax_out, .sentinel=sentinel};
+  const swap_colors = .{.x_in=x_in, .b_in = Ax_out, .y_out=y_out, .Ax_out = b_in,   .sentinel=sentinel};
+  const send_right  = .{.x_in=x_in, .b_in = Ax_out, .y_out=y_out, .Ax_out = y_out,  .sentinel=sentinel};
+
+  const this_file = "code.csl";
+
+  for (@range(i16, 3)) |i| {
+    for (@range(i16, 4)) |j| {
+      if (i == 1) {
+        @set_tile_code(i, j, this_file, swap_colors);
+      } else {
+        @set_tile_code(i, j, this_file, same_colors);
+      }
+    }
+  }
+
+
+  @set_tile_code(3, 0, this_file, send_right);
+  @set_tile_code(3, 1, this_file, send_right);
+  @set_tile_code(3, 2, this_file, send_right);
+  @set_tile_code(3, 3, this_file, send_right);
+
+  /// Routes
+
+  const RX_N_TX_R = .{.rx=.{NORTH}, .tx=.{RAMP}};
+  const RX_N_TX_RS = .{.rx=.{NORTH}, .tx=.{RAMP, SOUTH}};
+  const RX_W_TX_R = .{.rx=.{WEST}, .tx=.{RAMP}};
+  const RX_R_TX_E = .{.rx=.{RAMP}, .tx=.{EAST}};
+
+  for (@range(i16, 4)) |i| {
+    for (@range(i16, 4)) |j| {
+      // Transmit routes. Last column sends on `y_out`. Otherwise, even columns
+      // send on `Ax_out` and odd on `b_in`
+      if (i == 3) {
+        @set_color_config(i, j, y_out, RX_R_TX_E);
+      } else if (i == 1) {
+        @set_color_config(i, j, b_in, RX_R_TX_E);
+      } else {
+        @set_color_config(i, j, Ax_out, RX_R_TX_E);
+      }
+
+      // Receive routes. Even columns recieve on `b_in`, odd on `Ax_out`
+      if (i == 3 or i == 1) {
+        @set_color_config(i, j, Ax_out, RX_W_TX_R);
+      } else {
+        @set_color_config(i, j, b_in, RX_W_TX_R);
+      }
+
+      // Set routes for x_in
+      if (j == 3) {
+        @set_color_config(i, j, x_in, RX_N_TX_R);
+      }
+      else {
+        @set_color_config(i, j, x_in, RX_N_TX_RS);
+      }
+
+    }
+  }
+}

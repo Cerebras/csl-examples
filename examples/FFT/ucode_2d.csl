@@ -1,0 +1,238 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+const main_color: color = @get_color(0);
+const sync_color: color = @get_color(1);
+const transposeLR_color: color = @get_color(2);
+const transposeRL_color: color = @get_color(3);
+const LR_color: color = @get_color(4);
+const RL_color: color = @get_color(5);
+const sentinelLR_color: color = @get_color(6);
+const sentinelRL_color: color = @get_color(7);
+param output_color: color;
+
+// Problem size
+param Nz: i16;
+param Nx: i16;
+param Ny: i16;
+
+// Number of PEs in the Row
+param WIDTH: i16;
+param HEIGHT: i16;
+
+param FP: i16;
+param tensor_type: type;
+
+const Tx: i16 = Nx/WIDTH;
+const Ty: i16 = Ny/HEIGHT;
+const Tz: i16 = Tx;
+
+
+// Index of the PE
+param PE_X: i16;
+
+// PE_X0 and PE_XW are hacks since we cannot set
+// these indices conditionally on the DSD declaration.
+param PE_X0: i16;
+param PE_XW: i16;
+
+const WIDTHm1: i16 = WIDTH-1;
+const REV_PE_X: i16 = WIDTHm1-PE_XW;
+
+// In half words
+const ELEM_SIZE: i16 = 2;
+const WAVELETS_PER_ELEM: i16 = FP;
+
+// Depth of the array of Bricks of T^3
+const DEPTH = Nz/Tz;
+// Length of the Pencil array of elements (complex numbers)
+const PENCIL_ELEMS = Nz; //DEPTH*Tz
+const PENCIL_LEN = PENCIL_ELEMS*ELEM_SIZE;
+const PENCIL_NUM = Tx * Ty;
+
+// Local Tensor
+const BRICK_ELEMS = Tx*Ty*Tz;
+const BRICK_WAVELETS = BRICK_ELEMS*WAVELETS_PER_ELEM;
+const BRICK_LEN = BRICK_ELEMS*ELEM_SIZE;
+const ARRAY_LEN = DEPTH*BRICK_LEN; // 2 as complex+real
+
+var X = @zeros([ARRAY_LEN]tensor_type);
+var X_transposed = @zeros([ARRAY_LEN]tensor_type);
+var f = @zeros([Nz]tensor_type);
+
+// Sentinel data for a sequence of NOP_NOCE and ADVANCE_NOCE
+var sentinel_data = @constants([2]u32, 0x8b009249);
+
+// Filter counters
+var sync_cnt:i16 = 0;
+var rev:i16 = 1;
+
+const X_transposed_base_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> X_transposed[i] });
+const X_base_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> X[i] });
+
+// Number of Wavelets sent: each PE sends one element to all the other PEs (total of DEPTH-1 elements),
+// so each PE receives DEPTH-1 elements from DEPTH-1 PEs, one from each.
+const TRANS_LEN = (DEPTH-1)*BRICK_WAVELETS;
+
+// Send Data from the left to the right part of the row (transposing the right triangular submatrix).
+// All PEs send elements from 1 to N (since we have complex numbers, the second element is at i+BRICK_LEN).
+// Technically each element would only need to send from left to right, from its PE_X index to N,
+// but then each PE would send one less element each time which would require runtime update of filters
+// in teardown mode. This is not supported yet in CSL, so we just send fixed N-1 elements although only
+// N-PE_X elements are used. Fabric Filters do the job of removing the extra wavelets that are sent since
+// each PE catches one element in every N-1 elements.
+const sendLeftData_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{TRANS_LEN} -> X[i+BRICK_LEN] });
+// Send Data from the right to the left part of the Row (transposing the left triangular submatrix).
+const sendRightData_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{TRANS_LEN} -> X[i]});
+
+// Here we send elements from N-2 to 0. Once again, technically only elements from PE_X-1 to 0 are necessary.
+// Therefore, each PE sends N-1 elements on each color.
+const sendLR_dsd = @get_dsd(fabout_dsd, .{ .extent = TRANS_LEN, .fabric_color = LR_color, .output_queue = 2 });
+const sendRL_dsd = @get_dsd(fabout_dsd, .{ .extent = TRANS_LEN, .fabric_color = RL_color, .output_queue = 3 });
+
+// Each PE receives as many bricks in each direction as PEs are in that direction
+const recvLR_dsd = @get_dsd(fabin_dsd,  .{ .extent = PE_X0*BRICK_WAVELETS, .fabric_color = LR_color, .input_queue = 0 });
+const recvRL_dsd = @get_dsd(fabin_dsd,  .{ .extent = REV_PE_X*BRICK_WAVELETS, .fabric_color = RL_color, .input_queue = 1 });
+
+// DSDs to send control wavelets to advance switches. We need to advance 2 positions, thus send 2 sentinels.
+const sentinelLR_dsd = @get_dsd(fabout_dsd, .{ .extent = 2, .fabric_color = LR_color, .control = true, .output_queue = 2 });
+const sentinelRL_dsd = @get_dsd(fabout_dsd, .{ .extent = 2, .fabric_color = RL_color, .control = true, .output_queue = 3 });
+
+// DSD describing the DSD that contains the payload of the control wavelets.
+const sentinelData_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> sentinel_data[i]});
+
+// Memory DSD to receive data from Fabin. This DSD gets one element each time. It reads PE_X from
+// the left and WIDTH-PE_X fromt he right. The PE_X0 and PE_XW are a hack so that the compiler doesn't
+// complain about a DSD with length 0.
+// In reality these DSD at the corners (PEs 0 and WIDTH-1) don't use these DSD so they could be NULL.
+const recvDataLeft_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{PE_X0*BRICK_WAVELETS} -> X_transposed[i] });
+const recvDataRight_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{REV_PE_X*BRICK_WAVELETS} -> X_transposed[ARRAY_LEN-2-i]});
+
+// Import the code in the file `fft.csl` as the module `mod`, and
+// instantiate the module's `N` parameter.
+
+const mod = @import_module("fft.csl", .{ .N = Nz, .ARRAY_LEN = ARRAY_LEN, .X=&X, .FP=FP, .tensor_type=tensor_type});
+
+task main_task() void {
+  mod.fft(&f);
+
+  // Initiate the Data Transpose
+  if (WIDTH > 0){
+    if (sync_cnt == 0){
+      if (PE_X == 0) {
+        @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR });
+      } else {
+        @fmovs(recvDataLeft_dsd,  recvLR_dsd, .{ .async = true, .activate = transposeLR} );
+      }
+      if (PE_X == WIDTHm1) {
+        @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL });
+      } else {
+        @fmovs(recvDataRight_dsd, recvRL_dsd, .{ .async = true, .activate = transposeRL} );
+      }
+    } else {
+      if (PE_X == 0) {
+        const outDsd = @get_dsd(fabout_dsd, .{
+          .extent = 1,
+          .fabric_color = output_color,
+        });
+
+        // Signal completion to host
+        @mov16(outDsd, 0);
+      }
+    }
+  }
+}
+
+// Continue the Data Transpose. Receive as much data as the position of the PE.
+task transposeLR(data: i16) void {
+  if (PE_X == WIDTHm1){@activate(sync_color);}
+  else {@fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR });}
+}
+task transposeRL(data: i16) void {
+  if (PE_X == 0){@activate(sync_color);}
+  else {@fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL });}
+}
+
+// Send control wavelets to advance the switches
+task sentinelLR(data: i16) void {
+  @mov32(sentinelLR_dsd, sentinelData_dsd, .{ .async = true, .activate = sync });
+}
+task sentinelRL(data: i16) void {
+  @mov32(sentinelRL_dsd, sentinelData_dsd, .{ .async = true, .activate = sync });
+}
+
+task sync(data: i16) void {
+  sync_cnt += 1;
+  if (sync_cnt == 2) {
+    if (PE_X > 0){
+      // Upper triangular matrix of X_transposed.
+      var X_transposed_upper_tri_dsd = @set_dsd_length(X_transposed_base_dsd, PE_X0*BRICK_WAVELETS);
+      var X_upper_tri_dsd            = @set_dsd_length(X_base_dsd, PE_X0*BRICK_WAVELETS);
+      @fmovs(X_upper_tri_dsd, X_transposed_upper_tri_dsd);
+    }
+    if (PE_X < WIDTHm1){
+      // Lower triangular matrix of X_transposed
+      var X_transposed_lower_tri_dsd = @set_dsd_length(X_transposed_base_dsd, (REV_PE_X*BRICK_WAVELETS) );
+      X_transposed_lower_tri_dsd     = @increment_dsd_offset(X_transposed_lower_tri_dsd, ( (PE_X+1)*BRICK_WAVELETS), f32); // Write after PEth brick
+
+      var X_lower_tri_dsd            = @set_dsd_length(X_base_dsd, (REV_PE_X*BRICK_WAVELETS) );
+      X_lower_tri_dsd                = @increment_dsd_offset(X_lower_tri_dsd, ( (PE_X+1)*BRICK_WAVELETS), f32); // Write after PEth brick
+      @fmovs(X_lower_tri_dsd, X_transposed_lower_tri_dsd);
+    }
+
+    @activate(main_color);
+  }
+}
+
+comptime {
+  @activate(main_color);
+  @block(LR_color);
+  @block(RL_color);
+
+  @bind_task(main_task, main_color);
+  @bind_task(transposeLR, transposeLR_color);
+  @bind_task(transposeRL, transposeRL_color);
+  @bind_task(sentinelLR, sentinelLR_color);
+  @bind_task(sentinelRL, sentinelRL_color);
+  @bind_task(sync, sync_color);
+
+  if (PE_X == 0) {
+     @set_local_color_config(LR_color, .{ .rx = .{ RAMP }, .tx = .{ EAST }, .pop_mode = .{.always_pop = true},
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+     @set_local_color_config(RL_color, .{ .rx = .{ EAST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true},
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+
+  } else if (PE_X == WIDTHm1) { //LAST PE
+    @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true},
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
+    @set_local_color_config(RL_color, .{ .rx = .{ RAMP }, .tx = .{ WEST }, .pop_mode = .{.always_pop = true},
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+
+  } else { // PEs in the MIDDLE
+    if (PE_X == 1) {
+      @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
+                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+    } else {
+      @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
+                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-PE_X)*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
+    }
+
+    @set_local_color_config(RL_color, .{ .rx = .{ EAST }, .tx = .{ RAMP, WEST }, .pos1 = .{ .tx = WEST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-(PE_X+1))*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
+  }
+
+  if (PE_X == 0) {
+    @set_local_color_config(output_color, .{ .rx = .{ RAMP }, .tx = .{ WEST } });
+  }
+}
