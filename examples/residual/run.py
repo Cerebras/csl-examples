@@ -108,11 +108,11 @@ def csl_compile(name: str, compile_flag: bool, cslc: str, LOCAL_OUT_SZ: int, LOC
   fabric_height = height + 2
   csl_cmd = f"{cslc} {file_config} --fabric-dims={fabric_width},{fabric_height} \
   --fabric-offsets=1,1 --params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ} -o {name}"
-  print(f"[csl_compile] command line for cslang: {csl_cmd}")
+  print(f"[csl_compile] command line for CSL: {csl_cmd}")
   if compile_flag:
     result = os.system(csl_cmd)
     if result > 0:
-      print("ERROR: cslang fails\n")
+      print("ERROR: CSL fails\n")
       exit(1)
   else:
     print(f"MUST CHECK: no -c flag, the user has to compile layout.csl with above command")
