@@ -23,7 +23,7 @@
    For example, the kernel has 2-by-2 PEs, with the index P0.0, P1.0, P0.1, P1.1
    in the layout/routing configuration.
    The compiler generates ELFs out_0_0.elf, out_0_1.elf, out_1_0.elf and out_1_1.elf.
-   However the user needs gloal coordinate (including halo) for debugging, for example
+   However the user needs global coordinate (including halo) for debugging, for example
    P0.0 of the kernel is P1.1 when the user calls sdk_debug_shell to dump the trace or
    landing log.
 
