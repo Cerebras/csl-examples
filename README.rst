@@ -30,7 +30,7 @@ Examples
 
 The material in the `examples` folder should be studied last. It contains six sample applications, each of which solves a specific problem:
 
-* `gemv`: This is arguably the simples application and therefore a good place to start. It implements generalized matrix-vector multiplication in about 100 lines of CSL.
+* `gemv`: This is arguably the simplest application and therefore a good place to start. It implements generalized matrix-vector multiplication in about 100 lines of CSL.
 * `wide-multiplication`: Implements multiplication of two 128-bit unsigned integers in approximately 100 lines of CSL.
 * `FFT`: Implements 1D and 2D Discrete Fourier Transforms, DFT in 400+ lines of CSL.
 * `residual`: Computes the norm of the residual of  a matrix-vector multiplication. Builds on GEMV. Approximately 500 lines of CSL.
