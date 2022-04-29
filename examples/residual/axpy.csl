@@ -41,7 +41,6 @@ fn saxpy( n: i16, alpha: f32, x: *[sizeXY]f32, y: *[sizeXY]f32 ) void {
     // bind vector y to DSD
     // it is based on mem_x_buf_dsd, so no need to set the length again
     var mem_y_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, y);
-    //mem_y_buf_dsd = @set_dsd_length(mem_y_buf_dsd, @bitcast(u16, n) );
 
     // fast path: if alpha is zero, no need to compute
     if (alpha == @as(f32, 0)){
