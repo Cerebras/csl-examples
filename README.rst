@@ -20,7 +20,7 @@ The examples are divided into two main categories, tutorials and examples, descr
 Tutorials
 ------
 
-The material in the `tutorials` folder assumes that you have gone through the introduction first. There are 21 tutorial examples, 
+This is the place to start. There are 21 tutorial examples, 
 each of which illustrates a specific language feature in more detail. You can work through the examples in the
 order suggested by the prefix number of each example. However, you can also work through these examples in almost any other
 order and just refer to other tutorials as needed, depending on which concepts are being used.
