@@ -1,0 +1,52 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; the top-level source file is code.csl.
+
+param inColor: color;
+param outColor: color;
+
+param inDir;
+param outDir;
+
+const dsd = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = outColor, .output_queue = 0 });
+
+var result = @zeros([1]i16);
+const resultDsd = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{1} -> result[i]
+});
+
+task thisTask(data: i16) void {
+  // Pause incoming wavelets until we've sent the processed result.
+  @block(inColor);
+
+  // Do some computation on the input data.
+  result[0] = data * 2;
+
+  // Send the result in a microthread.
+  @mov16(dsd, resultDsd, .{ .async = true, .unblock = thisTask });
+}
+
+comptime {
+  @comptime_assert(inDir != outDir);
+  @comptime_assert(inDir != RAMP and outDir != RAMP);
+
+  const inRoute = .{ .rx = .{ inDir }, .tx = .{ RAMP } };
+  @set_local_color_config(inColor, inRoute);
+
+  const outRoute = .{ .rx = .{ RAMP }, .tx = .{ outDir } };
+  @set_local_color_config(outColor, outRoute);
+
+  @bind_task(thisTask, inColor);
+}

@@ -1,0 +1,216 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example computes |b-A*x|_inf on a 2-by-2 rectangle which has P0.0, P0.1, P1.0 and P1.1
+// The matrix A is distributed via set_symbol_rect at initialization time
+// The vector x is transferred from the north of the rectangle
+// The vector b is transferred from the west of the rectangle
+// The result |b-A*x| is transferred to the east of P1.0
+//
+// Each PE receives a vector x and computes A*x locally, then performs a row reduction to finish y = b - A*x
+// The last column contains the vector y, and performs a column reduction to compute |b-A*x|
+
+// Notation: a PE (Px.y) is labeled as (px = x, py = y)
+
+// local colors
+param  RXACT_X: color ;   // receive vector x from the fabric
+param  RXACT_Y: color ;   // px = 0: receive vector b from the fabric
+                   // px = 1: receive partial sum (b - A*x) from px = 0
+param  RXACT_NRM: color;  // P1.0: receive nrm from P1.1
+param  TXACT_Y: color ;   // px = 0: send parital sum to px = 1
+param  TXACT_NRM: color ; // P1.0: send |b-A*x| to the fabric
+                   // P1.1: send local nrm to P1.0
+
+// local tasks
+param STARTUP: color ;  // read vector x via microthread
+param COMP: color;      // compute local Ax = A*x
+param REDUCE: color;    // compute either local b - A*x or local y - A*x
+param DONE: color;      // compute |b-A*x| and send out the result
+
+// (_px, _py) is logical coordinate of a PE in a region of interest
+param  _px : i16 ; // coordinate x in ROI
+param  _py : i16 ; // coordinate y in ROI
+
+param LOCAL_OUT_SZ:i16 ;  // dimension of submatrix A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ
+param LOCAL_IN_SZ:i16  ;  // dimension of subvector x is LOCAL_IN_SZ-by-1
+                          // dimension of subvector y is LOCAL_OUT_SZ-by-1
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+// A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ with lda=LOCAL_OUT_SZ
+// x is LOCAL_IN_SZ-by-1
+// y is LOCAL_OUT_SZ-by-1
+
+// Assumption
+// - _MAX_SIZE_X >= LOCAL_IN_SIZE
+// - _MAX_SIZE_Y >= LOCAL_OUT_SIZE
+// - _MAX_SIZE_A >= LOCAL_OUT_SIZE * LOCAL_IN_SIZE
+const  _MAX_SIZE_A = LOCAL_OUT_SZ * LOCAL_IN_SZ;
+const  _MAX_SIZE_X = 32;
+const  _MAX_SIZE_Y = 32;
+
+var A  = @zeros([_MAX_SIZE_A]f32);
+var x  = @zeros([_MAX_SIZE_X]f32);
+var Ax = @zeros([_MAX_SIZE_Y]f32);
+var y  = @zeros([_MAX_SIZE_Y]f32);
+
+// workspace for outer-product version of GEMV
+var ws = @zeros([_MAX_SIZE_Y]f32);
+
+var nrm = @zeros([1]f32);
+var local_nrm : f32 = @as(f32, 0.0);
+
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs) to configure DSR
+// The DSDs are typically put in their own data segment that is placed right above lo-mem.?
+//
+// The content of a DSR is a DSD, whichis a data structure stored in memory.
+// A DSR is a numbered hardware registerand, like a GPR, is memory mapped.
+// DSRs hold DSDs. Their numbers are stored in instruction operand fields, where the DSD held by the DSR
+// serves to describe the actual data operand, which is a memory or fabric tensor.
+////////////////////////////////////////////////////////////////////////////////
+
+const mem_x_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{LOCAL_IN_SZ} -> x[i] });
+
+const fab_recv_x_wdsd = @get_dsd(fabin_dsd, .{
+    .extent = LOCAL_IN_SZ,
+    .fabric_color = RXACT_X,
+    .input_queue = 0
+});
+
+const mem_y_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{LOCAL_OUT_SZ} -> y[i] });
+
+const fab_recv_y_wdsd = @get_dsd(fabin_dsd, .{
+    .extent = LOCAL_OUT_SZ,
+    .fabric_color = RXACT_Y,
+    .input_queue = 1
+});
+
+
+const fab_trans_psum_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = LOCAL_OUT_SZ,
+    .fabric_color = TXACT_Y,
+    .output_queue = 0
+});
+
+
+const mem_nrm_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> nrm[i] });
+
+const fab_recv_nrm_wdsd = @get_dsd(fabin_dsd, .{
+    .extent = 1,
+    .fabric_color = RXACT_NRM,
+    .input_queue = 2
+});
+
+
+const fab_trans_nrm_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT_NRM,
+    .output_queue = 1
+});
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+////////////////////////////////////////////////////////////////////////////////
+
+const gemv_mod = @import_module( "gemv.csl" , .{  .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_Y });
+
+const axpy_mod = @import_module( "axpy.csl" , .{  .sizeXY = _MAX_SIZE_Y });
+
+const nrminf_mod = @import_module( "nrminf.csl" , .{  .sizeX = _MAX_SIZE_Y });
+
+
+task f_startup() void {
+
+// use microthread to read x, b or partial sum y/nrm, so block RXACT_X, RXACT_Y and RXACT_NRM
+    @block( RXACT_X );
+    @block( RXACT_Y );
+    @block( RXACT_NRM );
+
+// receive x from fabric
+    @mov32(mem_x_buf_dsd, fab_recv_x_wdsd, .{.async=true, .activate = f_comp});
+}
+
+
+// All PEs compute local A*x after x is received
+task f_comp() void {
+
+    //  Ax = A * x + 0*y
+    var alpha: f32 = @as(f32, 1.0);
+    var beta : f32 = @as(f32, 0.0);
+    //gemv_mod.sgemv_inner(LOCAL_OUT_SZ, LOCAL_IN_SZ, alpha, &A, LOCAL_OUT_SZ, &x, beta, &Ax);
+    gemv_mod.sgemv_outer(LOCAL_OUT_SZ, LOCAL_IN_SZ, alpha, &A, LOCAL_OUT_SZ, &x, beta, &Ax, &ws);
+
+    // px = 0: receive vector b from the west
+    // px = 1: receive partial sum from the west
+    @mov32(mem_y_buf_dsd, fab_recv_y_wdsd, .{.async=true, .activate = f_reduce});
+}
+
+task f_reduce() void {
+    // y  = b if px = 0 (from the west)
+    //    = partial sum if px = 1 (from the west)
+    // Ax = local gemv
+
+    // px = 0: y = b - A*x
+    // px = 1: y = y_recv - A*x, where y_recv = b-A*x in px=0
+    var alpha : f32 =  @as(f32, -1.0);
+    axpy_mod.saxpy( LOCAL_OUT_SZ, alpha, &Ax, &y);
+
+    if (0 == _px){
+        // send partial sum to the east and finish
+        @mov32(fab_trans_psum_wdsd, mem_y_buf_dsd, .{.async=true});
+    }else{
+        // px = 1: compute norm of local (b-A*x)
+        nrminf_mod.snrminf(LOCAL_OUT_SZ, &y, &local_nrm);
+
+        if (0 == _py){
+            // P1.0: receive nrm from the south
+            @mov32(mem_nrm_buf_dsd, fab_recv_nrm_wdsd, .{.async=true, .activate = f_done});
+        }else{
+            // P1.1: send local nrm to north and finish
+            // only DSD operands are allowed for an async operation, so remove ".async=true"
+            @fmovs(fab_trans_nrm_wdsd, local_nrm);
+        }
+    }
+}
+
+// Only P1.0 triggers f_done to send out |b-A*x|
+task f_done() void {
+
+    // loc_nrm = |b - A*x| locally
+    // nrm[0] = |b - A*x| from south
+    // nrm[0] = max( nrm[0], local_nrm)
+    if (nrm[0] < local_nrm){
+        nrm[0] = local_nrm;
+    }
+
+    // send |b-A*x| to the east
+    @mov32(fab_trans_nrm_wdsd, mem_nrm_buf_dsd, .{.async=true});
+}
+
+
+comptime {
+
+    @activate(STARTUP);
+
+    @bind_task( f_startup, STARTUP);
+    @bind_task( f_comp,    COMP);
+    @bind_task( f_reduce,  REDUCE);
+    @bind_task( f_done,    DONE);
+}

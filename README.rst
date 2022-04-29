@@ -17,7 +17,6 @@ Each example is located in its own sub-folder, and contains files of the followi
 
 The examples are divided into two main categories, tutorials and examples, described in the following sections.
 
-
 Tutorials
 ------
 
@@ -38,6 +37,17 @@ The material in the `examples` folder should be studied last. It contains six sa
 * `histogram-torus`: A communication demo. The fabric memory is filled with random values which are then sorted into buckets, 
   where each bucket is a single processing element of the WSE.
 * `stencil`: A 3D 25-point stencil implemented in a little less than 700 lines of CSL.
+
+Branches
+------
+For each release of the SDK, there is a corresponding branch in this repository which contains a version of the CSL examples which are compatible with that SDK release. For example, 
+the branch `csl-rel-0.4.0` in this repository contains a version of the CSL examples which will work (compile and simulate) with the SDK 0.4.0 release.  The `master` branch is identical to the newest release branch.
+
+Full backward compatibility of the SDK is not guaranteed. 
+This means that in rare cases, a CSL example compatible with an older SDK release may not work with a newer SDK release.
+
+
+
 
 End User License Agreement
 ----
