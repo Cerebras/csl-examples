@@ -1,0 +1,54 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; we include it here for illustrating the syntax.
+
+fn abs(input: f16) f16 {
+  if (input < 0.0) {
+    return -input;
+  }
+
+  return input;
+}
+
+fn nan() f16 {
+  // Cast 0xffff as a 16-bit unsigned integer
+  const intValue = @as(u16, 0xffff);
+
+  // Interpret 0xffff as an IEEE 754 binary16 value; NOT int-to-float
+  return @bitcast(f16, intValue);
+}
+
+fn my_sqrt(input: f16, maxIterations: i16) f16 {
+  var count: i16 = 1;
+  var prev: f16 = 0.0;
+  var result = input;
+
+  if (input < 0.0) {
+    return nan();
+  }
+
+  while (count < maxIterations) {
+    // Terminate early if the result has not changed significantly
+    if (abs(result - prev) < 1e-6) {
+      break;
+    }
+
+    prev = result;
+    result = 0.5 * (result + input / result);
+    count += 1;
+  }
+
+  return result;
+}

@@ -1,0 +1,135 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Color to receive input data
+param recvColor: color;
+
+// Sentinel color to mark the end of the input data, and to trigger computation
+param triggerColor: color;
+
+// Color to signal the completion of the program back to the host
+param outputColor: color;
+
+// The number of bits to use for the result.  Inputs, also, use the same bits.
+// Since overflow, if any, is ignored, set the bits to be large enough so that
+// the computation doesn't overflow for the numbers you care about.
+param numBits: u16;
+
+// Size of a 16-bit unsigned integer, in bits.
+const wordSize = 16;
+
+comptime {
+  // Ensure that the number of bits is indeed a multiple of the word size.
+  @comptime_assert(numBits % wordSize == 0);
+}
+
+// The number of 16-bit words that we will use to store the numeric values.
+const words = numBits / wordSize;
+
+// Initialize both operands and result with zeros.
+var x = @zeros([words]u16);
+var y = @zeros([words]u16);
+var result = @zeros([words]u16);
+
+fn willAddOverflow(left: u16, right: u16, carryFlag: bool) bool {
+  const carry = @as(u16, carryFlag);
+  return (left + right < left) or (left + right + carry < left + right);
+}
+
+task multiply() void {
+  var wordIndex:u16 = 0;
+  var wordOffset:u16 = 0;
+
+  // Loop over all bits in all words of the RHS (`y`) value
+  while (wordIndex < words) {
+    if ((y[wordIndex] & (@as(u16, 1) << wordOffset)) != 0) {
+
+      var carryBit = false;
+
+      // Add (shifted) `x` to `result`
+      var idx:u16 = 0;
+
+      while (idx < words) : (idx += 1) {
+        const newCarryBit = willAddOverflow(x[idx], result[idx], carryBit);
+
+        // Since `result` is of type u16, the addition is truncated to 16 bits
+        result[idx] += x[idx] + @as(u16, carryBit);
+        carryBit = newCarryBit;
+      }
+    }
+
+    // shift `x` left by one bit
+    var idx = @as(i16, words) - 1;
+    while (idx >= 0) : (idx -= 1) {
+      x[idx] <<= 1;
+
+      // If this is not the last word, then OR with the MSB of the next word
+      if (idx > 0) {
+        const msbMask = 0x8000;
+        if ((x[idx - 1] & msbMask) != 0) {
+          x[idx] |= 0x1;
+        }
+      }
+    }
+
+    // update counters to point to the next bit
+    if (wordOffset == 15) {
+      wordOffset = 0;
+      wordIndex += 1;
+    } else {
+      wordOffset += 1;
+    }
+  }
+
+  // DSD to send the output to the fabric.
+  const outDsd = @get_dsd(fabout_dsd, .{
+    .extent = words,
+    .fabric_color = outputColor,
+  });
+
+  const dataDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{words} -> result[i]
+  });
+
+  @mov16(outDsd, dataDsd);
+}
+
+// Store the received word in the value at the appropriate offset
+task recvTask(data: u16, index: u16) void {
+  // Using the index allows a single color to be used for
+  // initializing both X and Y tensors
+  if (index < words) {
+    x[index] = data;
+  } else {
+    y[index - words] = data;
+  }
+}
+
+comptime {
+  @bind_task(recvTask, recvColor);
+  @bind_task(multiply, triggerColor);
+}
+
+layout {
+  @set_rectangle(1, 1);
+  @set_tile_code(0, 0, "code.csl", .{
+    .numBits = numBits,
+    .recvColor = recvColor,
+    .outputColor = outputColor,
+    .triggerColor = triggerColor,
+  });
+
+  @set_color_config(0, 0, recvColor, .{ .rx = .{ WEST }, .tx = .{ RAMP } });
+  @set_color_config(0, 0, outputColor, .{ .rx = .{ RAMP }, .tx = .{ WEST } });
+}

@@ -1,0 +1,176 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param FIRST_COLOR:u16;
+param LAST_PE:i16;
+param FROM:direction;
+
+const c1: color = @get_color(FIRST_COLOR);
+const c2: color = @get_color(FIRST_COLOR + 1);
+const c3: color = @get_color(FIRST_COLOR + 2);
+const c4: color = @get_color(FIRST_COLOR + 3);
+
+fn flip(d:direction) direction {
+  @comptime_assert(d != RAMP);
+  if (d == NORTH) {
+    return SOUTH;
+  }
+  if (d == SOUTH) {
+    return NORTH;
+  }
+  if (d == WEST) {
+    return EAST;
+  }
+  // d == EAST
+  return WEST;
+}
+
+fn next_available_color() u16 {
+  return FIRST_COLOR + 4;
+}
+
+const TO:direction = flip(FROM);
+
+// Torus routing: Each row and column is wired in a ring. Even numbered PEs pass
+// data in one direction, and odd numbered PEs pass it in the opposite
+// direction.
+//
+// 'c1' and 'c2' alternate to pass data from FROM to TO.
+// 'c3' and 'c4' alternate to pass data from TO to FROM.
+//
+// PE 0 always recieves c4 from TO and sends on c1 to TO.
+//
+// The last PE always recieves from FROM and sends to FROM. The colors it uses
+// depends on how many PEs there are in the ring.
+//
+// The PEs in between alternate.
+// Even numbered PEs are receiving from FROM and sending to TO, using colors
+// c1 and c2. They have a pass-thru route for either c3 or c4 in the opposite
+// direction.
+// Odd numbered PEs are receiving from TO and sending to FROM, using colors
+// c3 and c4. They have a pass-thru route for either c1 or c2 in the opposite
+// direction.
+fn get_colors_ns(pe:i16) comptime_struct {
+  // first pe
+  if (pe == 0) {
+    return .{ .recv_ns = c4, .send_ns = c1 };
+  }
+
+  // last pe
+  if (pe == LAST_PE) {
+    if (LAST_PE % 4 == 1) {
+      return .{ .recv_ns = c1, .send_ns = c4 };
+    }
+    if (LAST_PE % 4 == 2) {
+      return .{ .recv_ns = c1, .send_ns = c3 };
+    }
+    if (LAST_PE % 4 == 3) {
+      return .{ .recv_ns = c2, .send_ns = c3 };
+    }
+    // LAST_PE % 4 == 0
+    return .{ .recv_ns = c2, .send_ns = c4 };
+  }
+
+  // other pes
+  if (pe % 4 == 1) { // odd pe
+    return .{ .recv_ns = c3, .send_ns = c4 };
+  }
+  if (pe % 4 == 2) { // even pe
+    return .{ .recv_ns = c1, .send_ns = c2 };
+  }
+  if (pe % 4 == 3) { // odd pe alternate
+    return .{ .recv_ns = c4, .send_ns = c3 };
+  }
+  // even pe alternate
+  return .{ .recv_ns = c2, .send_ns = c1 };
+}
+
+// See routing logic described in comment on get_colors_ns.
+fn set_routes(col:i16, row:i16, pe:i16) void {
+  if (pe == 0) { // first pe
+    @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
+    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
+  } else if (pe == LAST_PE) { // last pe
+    if (LAST_PE % 4 == 1) {
+      @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+      @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    } else if (LAST_PE % 4 == 2) {
+      @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+      @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    } else if (LAST_PE % 4 == 3) {
+      @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+      @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    } else {
+      @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+      @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    }
+  } else if (pe % 4 == 1) { // odd pe
+    @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ RAMP } });
+    @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    // pass thru
+    @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ TO } });
+  } else if (pe % 4 == 2) { // even pe
+    @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+    @set_color_config(col, row, c2, .{ .rx = .{ RAMP }, .tx = .{ TO } });
+    // pass thru
+    @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ FROM } });
+  } else if (pe % 4 == 3) { // odd pe alternate
+    @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
+    // pass thru
+    @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ TO } });
+  } else { // even pe alternate
+    @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
+    @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+    // pass thru
+    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ FROM } });
+  }
+}
+
+// This is the same as get_colors_ns, except for field names of returned struct.
+// Once we have comptime_struct field access operation, we can delete this
+// function and just use the other one.
+fn get_colors_we(col:i16) comptime_struct {
+  // first column
+  if (col == 0) {
+    return .{ .recv_we = c4, .send_we = c1 };
+  }
+
+  // last column
+  if (col == LAST_PE) {
+    if (LAST_PE % 4 == 1) {
+      return .{ .recv_we = c1, .send_we = c4 };
+    }
+    if (LAST_PE % 4 == 2) {
+      return .{ .recv_we = c1, .send_we = c3 };
+    }
+    if (LAST_PE % 4 == 3) {
+      return .{ .recv_we = c2, .send_we = c3 };
+    }
+    return .{ .recv_we = c2, .send_we = c4 };
+  }
+
+  // other columns
+  if (col % 4 == 1) { // odd column
+    return .{ .recv_we = c3, .send_we = c4 };
+  }
+  if (col % 4 == 2) { // even column
+    return .{ .recv_we = c1, .send_we = c2 };
+  }
+  if (col % 4 == 3) { // odd column alternate
+    return .{ .recv_we = c4, .send_we = c3 };
+  }
+  // even column alternate
+  return .{ .recv_we = c2, .send_we = c1 };
+}

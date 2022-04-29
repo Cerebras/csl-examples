@@ -1,0 +1,61 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// http://www.netlib.org/lapack/explore-html/d8/daf/saxpy_8f.html
+// SAXPY constant times a vector plus a vector.
+//     y = y + alpha*x
+//
+// @param[in] n      number of elements of the input vectors
+// @param[in] alpha  scalar
+// @param[in] x      array of dimension n
+//                   x[j] can be NAN or INF if alpha is zero
+// @param[in,out] y  array of dimension n
+
+
+param sizeXY : i16 ;  // size of x and y, sizeXY >= n
+
+// To change the base address and the length of a DSD, csl requires a dummy DSD.
+// The type here doesn't matter
+const dummy = @zeros([1]i16);
+// The length doesn't matter either since csl will overwrite it
+const dummy_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{42} -> dummy[i]});
+
+fn saxpy( n: i16, alpha: f32, x: *[sizeXY]f32, y: *[sizeXY]f32 ) void {
+
+    // bind vector x to a DSD
+    var mem_x_buf_dsd = @set_dsd_base_addr(dummy_dsd, x);
+    mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, @bitcast(u16, n) );
+
+    // bind vector y to DSD
+    // it is based on mem_x_buf_dsd, so no need to set the length again
+    var mem_y_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, y);
+    //mem_y_buf_dsd = @set_dsd_length(mem_y_buf_dsd, @bitcast(u16, n) );
+
+    // fast path: if alpha is zero, no need to compute
+    if (alpha == @as(f32, 0)){
+        return;
+    }
+
+    // y[j] = y[j] + x[j]*alpha, j = 0,1,2,...,n-1
+    // The SIMD fmacs replaces the following for-loop
+    // ========
+    // var row : i16 = 0;
+    // while(row < n) : (row +=1) {
+    //     (y.*)[row] = (y.*)[row] + alpha * (x.*)[row];
+    // }
+    // ========
+    @fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_x_buf_dsd, alpha);
+
+}
