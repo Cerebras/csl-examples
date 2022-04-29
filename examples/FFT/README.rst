@@ -36,7 +36,7 @@ representing `N` complex values.
 2D FFT implementation
 -------------------------------
 
-For an input of `N x N` complex elements, the 2D implementation uses `N` PE's organized in a
+For an input of `N x N` complex elements, the 2D implementation uses `N` PEs organized in a
 single row, i.e., the PE rectangle has dimensions `Nx1`. Each PE initially holds a column
 of `N` elements. The algorithm then proceeds in three main steps:
 
@@ -45,8 +45,8 @@ of `N` elements. The algorithm then proceeds in three main steps:
    is held by the PE with index `i`.
 #. The `N x N` matrix is transposed. Consider the PE at index `i` and its column elements
    `[0, 1, ..., N-1]`. To transpose this column PE `i` needs to send it's elements
-   `[0, 1, ..., i-1]` to the PE's with indices `0, 1, ..., i-1`, one element to each PE. Similarly,
-   PE `i` needs to send it's elements `[i+1, ...,N-1]` to the PE's with indices `i+1, ... N-1`,
+   `[0, 1, ..., i-1]` to the PEs with indices `0, 1, ..., i-1`, one element to each PE. Similarly,
+   PE `i` needs to send it's elements `[i+1, ...,N-1]` to the PEs with indices `i+1, ... N-1`,
    one element to each PE. So a given PE sends one element to each of the other PEs and it
    receives `N-1` elements from `N-1` other PEs. In the CSL implementation, this is achieved while
    parallelizing the transpose of the upper and lower triangular submatrices. When the transposition
