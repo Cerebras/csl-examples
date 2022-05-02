@@ -85,7 +85,7 @@ fn fetchSecondHalfConsts(consts: [2 * pattern - 1]f32, self: bool) [pattern]f32 
   return result;
 }
 
-// The sequence in which each PE receives wavetlets from its neighbors depends
+// The sequence in which each PE receives wavelets from its neighbors depends
 // on the relative placement of the PE within each group of `pattern` PEs.  This
 // function reorders the constants to match the sequence of source PE IDs so
 // that we multiply the incoming data with the right constants.

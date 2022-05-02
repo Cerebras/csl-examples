@@ -13,7 +13,7 @@ where:
 - ``result`` is the 256-bit wide result of multiplying X and Y.
 
 The simulation script ``run.py`` generates random values for ``X`` and ``Y``.
-``X`` is represented as a numpy array of 16 elements of type ``uint16`` on the form
+``X`` is represented as a NumPy array of 16 elements of type ``uint16`` on the form
 
     X = [x :subscript:`0`, x :subscript:`1`, ..., x :subscript:`7`, 0, 0, ..., 0]
 

@@ -23,7 +23,7 @@
    For example, the kernel has 2-by-2 PEs, with the index P0.0, P1.0, P0.1, P1.1
    in the layout/routing configuration.
    The compiler generates ELFs out_0_0.elf, out_0_1.elf, out_1_0.elf and out_1_1.elf.
-   However the user needs gloal coordinate (including halo) for debugging, for example
+   However the user needs global coordinate (including halo) for debugging, for example
    P0.0 of the kernel is P1.1 when the user calls sdk_debug_shell to dump the trace or
    landing log.
 
@@ -108,11 +108,11 @@ def csl_compile(name: str, compile_flag: bool, cslc: str, LOCAL_OUT_SZ: int, LOC
   fabric_height = height + 2
   csl_cmd = f"{cslc} {file_config} --fabric-dims={fabric_width},{fabric_height} \
   --fabric-offsets=1,1 --params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ} -o {name}"
-  print(f"[csl_compile] command line for cslang: {csl_cmd}")
+  print(f"[csl_compile] command line for CSL: {csl_cmd}")
   if compile_flag:
     result = os.system(csl_cmd)
     if result > 0:
-      print("ERROR: cslang fails\n")
+      print("ERROR: CSL fails\n")
       exit(1)
   else:
     print(f"MUST CHECK: no -c flag, the user has to compile layout.csl with above command")

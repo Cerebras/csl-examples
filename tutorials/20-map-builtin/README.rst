@@ -19,6 +19,6 @@ This example demonstrates three use-cases of the ``@map`` builtin:
    sum of all elements in a tensor.
 
 Without ``@map``, we would have to write explicit loops iterating over each element involved
-in these computations. With ``@map`` we can avoid writting such loops by utilizing the DSD
+in these computations. With ``@map`` we can avoid writing such loops by utilizing the DSD
 descriptions which specify the loop structure implicitly. Since DSDs are supported natively by the hardware,
 using ``@map`` can lead to significant performance gains compared to writing explicit loops.
