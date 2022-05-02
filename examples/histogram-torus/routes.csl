@@ -49,9 +49,9 @@ const TO:direction = flip(FROM);
 // 'c1' and 'c2' alternate to pass data from FROM to TO.
 // 'c3' and 'c4' alternate to pass data from TO to FROM.
 //
-// PE 0 always recieves c4 from TO and sends on c1 to TO.
+// PE 0 always receives c4 from TO and sends on c1 to TO.
 //
-// The last PE always recieves from FROM and sends to FROM. The colors it uses
+// The last PE always receives from FROM and sends to FROM. The colors it uses
 // depends on how many PEs there are in the ring.
 //
 // The PEs in between alternate.
@@ -62,12 +62,12 @@ const TO:direction = flip(FROM);
 // c3 and c4. They have a pass-thru route for either c1 or c2 in the opposite
 // direction.
 fn get_colors_ns(pe:i16) comptime_struct {
-  // first pe
+  // first PE
   if (pe == 0) {
     return .{ .recv_ns = c4, .send_ns = c1 };
   }
 
-  // last pe
+  // last PE
   if (pe == LAST_PE) {
     if (LAST_PE % 4 == 1) {
       return .{ .recv_ns = c1, .send_ns = c4 };
@@ -82,26 +82,26 @@ fn get_colors_ns(pe:i16) comptime_struct {
     return .{ .recv_ns = c2, .send_ns = c4 };
   }
 
-  // other pes
-  if (pe % 4 == 1) { // odd pe
+  // other PEs
+  if (pe % 4 == 1) { // odd PE
     return .{ .recv_ns = c3, .send_ns = c4 };
   }
-  if (pe % 4 == 2) { // even pe
+  if (pe % 4 == 2) { // even PE
     return .{ .recv_ns = c1, .send_ns = c2 };
   }
-  if (pe % 4 == 3) { // odd pe alternate
+  if (pe % 4 == 3) { // odd PE alternate
     return .{ .recv_ns = c4, .send_ns = c3 };
   }
-  // even pe alternate
+  // even PE alternate
   return .{ .recv_ns = c2, .send_ns = c1 };
 }
 
 // See routing logic described in comment on get_colors_ns.
 fn set_routes(col:i16, row:i16, pe:i16) void {
-  if (pe == 0) { // first pe
+  if (pe == 0) { // first PE
     @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
     @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
-  } else if (pe == LAST_PE) { // last pe
+  } else if (pe == LAST_PE) { // last PE
     if (LAST_PE % 4 == 1) {
       @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
       @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
@@ -115,22 +115,22 @@ fn set_routes(col:i16, row:i16, pe:i16) void {
       @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
       @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
     }
-  } else if (pe % 4 == 1) { // odd pe
+  } else if (pe % 4 == 1) { // odd PE
     @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ RAMP } });
     @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
     // pass thru
     @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ TO } });
-  } else if (pe % 4 == 2) { // even pe
+  } else if (pe % 4 == 2) { // even PE
     @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
     @set_color_config(col, row, c2, .{ .rx = .{ RAMP }, .tx = .{ TO } });
     // pass thru
     @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ FROM } });
-  } else if (pe % 4 == 3) { // odd pe alternate
+  } else if (pe % 4 == 3) { // odd PE alternate
     @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
     @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
     // pass thru
     @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ TO } });
-  } else { // even pe alternate
+  } else { // even PE alternate
     @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
     @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
     // pass thru

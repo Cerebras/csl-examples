@@ -79,8 +79,8 @@ var local_nrm : f32 = @as(f32, 0.0);
 // data-structure descriptors (DSDs), loaded into data-structure registers (DSRs) to configure DSR
 // The DSDs are typically put in their own data segment that is placed right above lo-mem.?
 //
-// The content of a DSR is a DSD, whichis a data structure stored in memory.
-// A DSR is a numbered hardware registerand, like a GPR, is memory mapped.
+// The content of a DSR is a DSD, which is a data structure stored in memory.
+// A DSR is a numbered hardware register and, like a GPR, is memory mapped.
 // DSRs hold DSDs. Their numbers are stored in instruction operand fields, where the DSD held by the DSR
 // serves to describe the actual data operand, which is a memory or fabric tensor.
 ////////////////////////////////////////////////////////////////////////////////

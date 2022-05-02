@@ -452,7 +452,7 @@ fn computeMinValue() f32 {
 }
 
 // The following are tasks that are activated when (asynchronous) send and
-// reveive operations in various directions complete.  Each task funnels to
+// receive operations in various directions complete.  Each task funnels to
 // either the `recvFin()` or the `sendFin()` function.  While it may _seem_
 // better to activate just one task instead of four, we cannot do so since the
 // hardware does not queue activations (instead, the hardware uses a single bit

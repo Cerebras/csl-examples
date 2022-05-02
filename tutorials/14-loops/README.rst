@@ -13,5 +13,5 @@ languages.  Specifically, CSL's ``for`` loop accepts a single argument, which
 is the array to iterate on, which is followed by one or two values between ``|``
 characters.  If only one name is specified, like ``pe_x`` in the example, this
 name is a ``const`` variable whose value is set to each element of the array.  If
-two names are specified, the second name is another ``const`` variable whoe value
-is set to the index of the array element.
+two names are specified, the second name is another ``const`` variable, the value
+of which is set to the index of the array element.

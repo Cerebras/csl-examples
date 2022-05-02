@@ -19,7 +19,7 @@ CSL includes some basic types such as:
 
 * ``bool`` for boolean values
 * ``i16`` and ``i32`` for 16- and 32-bit signed integers
-* ``u16`` and ``u32`` for 16- and 32-bit *unsigned* integers
+* ``u16`` and ``u32`` for 16- and 32-bit unsigned integers
 * ``f16`` and ``f32`` for 16- and 32-bit IEEE-754 floating point numbers
 
 In addition to the above, CSL also supports array types and pointer types.
