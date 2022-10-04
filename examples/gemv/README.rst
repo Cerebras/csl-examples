@@ -3,7 +3,8 @@
 GEMV
 ====
 
-This example shows a CSL program that performs generalized matrix-vector (GEMV) multiplication operation of the form:
+This example shows a CSL program that performs generalized matrix-vector (GEMV)
+multiplication operation of the form:
 
 .. code-block:: text
 
@@ -27,20 +28,26 @@ Below is a visualization of the kernel interface:
     :align: center
     :width: 980 px
 
-Note that this algorithm and the implementation is not optimized for performance. It is intended to serve as a non-trivial introductory example.
+Note that this algorithm and the implementation is not optimized for
+performance. It is intended to serve as a non-trivial introductory example.
 
 All computations are done in FP16 format.
 
-The algorithm uses tiling. For simplicity, we choose M as a multiple of the height of the kernel and N as a multiple of the width of the kernel.
+The algorithm uses tiling. For simplicity, we choose M as a multiple of the
+height of the kernel and N as a multiple of the width of the kernel.
 
 The matrix A, of shape [M, N], is distributed across the PE memories as follows:
 
-- The first dimension of A, M rows, is distributed across the height of the kernel.
-- The second dimension of A, N columns, is distributed across the width of
-the kernel.
+- The first dimension of A, M rows, is distributed across the height of the
+  kernel.
+- The second dimension of A, N columns, is distributed across the width of the
+  kernel.
 
-The following memory map specifies how the matrix A is distributed across the PE memories:
+The following memory map specifies how the matrix A is distributed across the PE
+memories:
 
-Since we know that M is 32 and the height of the kernel is 4, each PE will be assigned 32/4 = 8 rows of A.
+Since we know that M is 32 and the height of the kernel is 4, each PE will be
+assigned 32/4 = 8 rows of A.
 
-Similarly, each PE will get 16/4 = 4 columns of A. This means each PE is assigned a 8x4 chunk of the original matrix A.
+Similarly, each PE will get 16/4 = 4 columns of A. This means each PE is
+assigned a 8x4 chunk of the original matrix A.

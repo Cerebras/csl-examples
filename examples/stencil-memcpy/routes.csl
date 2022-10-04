@@ -1,0 +1,111 @@
+const util = @import_module("util.csl");
+
+param pattern: u16;
+param peWidth: u16;
+param peHeight: u16;
+
+fn initialSwitchPosition(pattFirst: bool, pattLast: bool) u16 {
+  if (pattern == 2) {
+    if (pattFirst) {
+      return 0;
+    }
+    return 2;
+  }
+  if (pattFirst) {
+    return 1;
+  }
+  if (pattLast) {
+    return 3;
+  }
+  return 0;
+}
+
+fn computeTxDir(dir: direction, isLast: bool) comptime_struct {
+  if (!isLast) {
+    return .{ dir, RAMP };
+  }
+  return .{ RAMP };
+}
+
+// The route when using a single neibhbor is quite different from the route for
+// non-unit neighbors.  The next two functions compute routes for these two
+// cases.
+fn twoPatternRoute(dir: direction, pattFirst: bool, pattLast: bool,
+    isLast: bool) comptime_struct {
+  return .{
+    .routes= .{
+        .rx = .{ RAMP },
+        .tx = computeTxDir(dir, isLast),
+        .pop_mode = .{ .always_pop = true },
+    },
+    .switches=.{
+        .pos1 = .{ .tx = RAMP },
+        .pos2 = .{ .rx = util.oppositeDirection(dir) },
+        .ring_mode = true,
+        .current_switch_pos = initialSwitchPosition(pattFirst, pattLast, 2)
+    },
+  };
+}
+
+fn genericRoute(dir: direction, notNeedsPos3: bool, pattFirst: bool,
+    pattLast: bool, isLast: bool) comptime_struct {
+  // The first `pattern - 1` PEs always forward, unless they're at the edge.
+  const baseRoute: comptime_struct = .{
+    .routes= .{
+        .rx = .{ util.oppositeDirection(dir) },
+        .tx = computeTxDir(dir, isLast),
+        .pop_mode = .{ .always_pop = true },
+    },
+    .switches=.{
+        .pos1 = .{ .rx = RAMP },
+        .pos2 = .{ .tx = RAMP },
+        .ring_mode = true,
+    }
+  };
+
+  if (notNeedsPos3) {
+    return baseRoute;
+  }
+
+  const pos3Route: comptime_struct = .{
+    .routes= .{
+        .rx = .{ util.oppositeDirection(dir) },
+        .tx = computeTxDir(dir, isLast),
+        .pop_mode = .{ .always_pop = true },
+    },
+    .switches=.{
+        .pos1 = .{ .rx = RAMP },
+        .pos2 = .{ .tx = RAMP },
+        .pos3 = .{ .rx = util.oppositeDirection(dir) },
+        .ring_mode = true,
+        .current_switch_pos = initialSwitchPosition(pattFirst, pattLast)
+    }
+  };
+
+  return pos3Route;
+}
+
+// This is the top-level function for computing the routes and switches.
+fn computeRoute(dir: direction, isFirst: bool, isLast: bool, notNeedsPos3: bool,
+    pattFirst: bool, pattLast: bool) comptime_struct {
+  if (isFirst) {
+    // The first PE only sends, never receives.
+    return .{
+      .routes= .{
+          .rx = .{ RAMP },
+          .tx = .{ dir, RAMP },
+          .pop_mode = .{ .always_pop = true },
+      },
+      .switches=.{
+          .pos1 = .{ .tx = RAMP },
+          .ring_mode = true,
+      }
+    };
+  }
+
+  if (pattern == 2) {
+    return twoPatternRoute(dir, pattFirst, pattLast, isLast);
+  }
+
+  return genericRoute(dir, notNeedsPos3, pattFirst, pattLast, isLast);
+}

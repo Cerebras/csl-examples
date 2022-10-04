@@ -2,7 +2,7 @@
 Libraries
 =========
 
-The CSLang compiler comes bundled with a few standard libraries, which can be
+The CSL compiler comes bundled with a few standard libraries, which can be
 imported into the user's program using the ``@import_module()`` builtin.  This
 example shows three such compiler-bundled libraries:
 

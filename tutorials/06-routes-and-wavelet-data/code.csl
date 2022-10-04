@@ -1,17 +1,3 @@
-// Copyright 2022 Cerebras Systems.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 var global: i16 = 0;
 
 const main_color: color = @get_color(0);
@@ -32,8 +18,8 @@ layout {
   @set_tile_code(0, 0, "code.csl");
 
   const route = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
-  @set_color_config(0, 0, main_color, route);
+  @set_color_config(0, 0, main_color, .{ .routes = route });
 
   const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-  @set_color_config(0, 0, output_color, output_route);
+  @set_color_config(0, 0, output_color, .{ .routes = output_route });
 }

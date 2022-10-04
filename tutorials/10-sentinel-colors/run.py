@@ -1,20 +1,5 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
 import argparse
 from glob import glob
 import numpy as np
@@ -59,8 +44,7 @@ output_port_map = f"{{out_tensor[idx=0:{max_idx}] -> [PE[1,idx] -> index[idx]]}}
 runner.add_output_tensor(output_color, output_port_map, np.float16)
 
 # Proceed with simulation; fetch the output wavelets once simulation completes
-sim_out_path = f"{name}/bin/core.out"
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 result_tensor = runner.out_tensor_dict["out_tensor"]
 
 # Ensure that the result matches our expectation

@@ -1,0 +1,30 @@
+param dataWidth;
+param dataHeight;
+param dataDepth;
+param ghostCells;
+
+// Local data size including ghost cells
+const bufferWidth = dataWidth + 2 * ghostCells;
+const bufferHeight = dataHeight + 2 * ghostCells;
+const bufferDepth = dataDepth + 2 * ghostCells;
+
+fn initializeData() [2, bufferDepth, bufferHeight, bufferWidth]f16 {
+// we use two copies of the buffer and we switch between them in each iteration
+// e.g. iteration #0: read from buffer #0 and write to buffer #1
+//      iteration #1: read from buffer #1 and write to buffer #0
+//      iteration #2: read from buffer #0 and write to buffer #1
+  var data = @zeros([2, bufferDepth, bufferHeight, bufferWidth]f16);
+
+  var i = 0;
+  while (i < dataDepth) : (i += 1) {
+    var j = 0;
+    while (j < dataHeight) : (j += 1) {
+      var k = 0;
+      while (k < dataWidth) : (k += 1) {
+        data[0, ghostCells + i, ghostCells + j, ghostCells + k] = 1.0;
+      }
+    }
+  }
+
+  return data;
+}

@@ -1,20 +1,5 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
 import argparse
 import json
 from glob import glob
@@ -81,7 +66,7 @@ kernel_height = 4
 
 # Parse the compile metadata
 compile_data = None
-with open(f"{name}/out.json") as json_file:
+with open(f"{name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
 assert compile_data is not None
 compile_colors = compile_data["colors"]
@@ -91,7 +76,6 @@ color_y = int(compile_colors["y_out"])
 color_sentinel = int(compile_colors["sentinel"])
 
 elf_paths = glob(f"{args.name}/bin/out_[0-9]*.elf")
-sim_out_path = f"{name}/bin/core.out"
 
 runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
@@ -112,8 +96,8 @@ runner.add_input_tensor(color_x, iport_x, x, sentinel=color_sentinel)
 runner.add_input_tensor(color_b, iport_b, b)
 runner.add_output_tensor(color_y, oport_y, dtype=np.float16)
 
-# Simulate and write the simulation output to `core.out`
-runner.connect_and_run(sim_out_path)
+# Simulate
+runner.connect_and_run()
 
 # Read tensor from simulation and compare it with the expected values
 result_tensor = runner.out_tensor_dict["y"]

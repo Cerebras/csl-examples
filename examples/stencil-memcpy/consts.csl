@@ -1,0 +1,93 @@
+param pattern: u16;
+param paddedZDim: u16;
+
+const math = @import_module("<math>");
+// We need to allocate space for not just the (padded) size of the problem (in
+// the Z dimension), but also space for ghost cells.
+const zBufferSize = paddedZDim + 2 * (pattern - 1);
+
+fn initBuffer() [2, zBufferSize]f32 {
+  return @zeros([2, zBufferSize]f32);
+}
+
+// Minimig - main.c:15-23, target_3d.c:23, and target_3d.c:30
+fn computeMinimigConsts(dx: u16) [9]f32 {
+  @comptime_assert(pattern == 5);
+  const dx2:f32 = @as(f32, dx * dx);
+  const c0:f32 = -205.0 / 72.0 / dx2;
+  const c1:f32 = 8.0 / 5.0 / dx2;
+  const c2:f32 = -1.0 / 5.0 / dx2;
+  const c3:f32 = 8.0 / 315.0 / dx2;
+  const c4:f32 = -1.0 / 560.0 / dx2;
+
+  return [9]f32 {
+    c4,
+    c3,
+    c2,
+    c1,
+    c0 * 3.0,
+    c1,
+    c2,
+    c3,
+    c4,
+  };
+}
+
+// `computeMinimigConsts()` computes constants in both the positive as well as
+// negative direction of the X, Y, and Z dimensions.  However, for any given
+// axis, our implementation splits communication and computation into two, one
+// for the positive direction and another for the negative direction.  This
+// function extracts the first half of the constants, and optionally includes
+// the center element.
+fn fetchFirstHalfConsts(consts: [2 * pattern - 1]f32, self: bool) [pattern]f32 {
+  var idx: u16 = 0;
+  var result = @zeros([pattern]f32);
+
+  if (!self) {
+    idx += 1;
+  }
+
+  while (idx < pattern) : (idx += 1) {
+    result[idx] = consts[pattern - idx - 1];
+  }
+
+  return result;
+}
+
+fn fetchSecondHalfConsts(consts: [2 * pattern - 1]f32, self: bool) [pattern]f32 {
+  var idx: u16 = 0;
+  var result = @zeros([pattern]f32);
+
+  if (!self) {
+    idx += 1;
+  }
+
+  while (idx < pattern) : (idx += 1) {
+    result[idx] = consts[pattern + idx - 1];
+  }
+
+  return result;
+}
+
+// The sequence in which each PE receives wavetlets from its neighbors depends
+// on the relative placement of the PE within each group of `pattern` PEs.  This
+// function reorders the constants to match the sequence of source PE IDs so
+// that we multiply the incoming data with the right constants.
+fn permuteConsts(pattId: u16, originalConsts: [pattern]f32) [pattern]f32 {
+  const start = pattId;
+  var result = @zeros([pattern]f32);
+
+  var idx: u16 = 0;
+  while (idx < pattern) : (idx += 1) {
+    var value: f32 = 0.0;
+    if (start < idx) {
+      value = originalConsts[(start + pattern) - idx];
+    } else {
+      value = originalConsts[start - idx];
+    }
+
+    result[idx] = value;
+  }
+
+  return result;
+}

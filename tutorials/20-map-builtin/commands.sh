@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 cslc ./code.csl \
 --fabric-dims=3,3 --fabric-offsets=1,1 \
 --params=size:5 \

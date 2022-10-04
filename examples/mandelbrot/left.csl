@@ -1,0 +1,65 @@
+const common = @import_module("common.csl");
+
+param pe_x: u32;
+param pe_y: u32;
+
+param in_color: color;
+param out_color: color;
+
+const main_color: color = @get_color(0);
+
+param image_height: u32;
+param image_width: u32;
+param max_iters: u32;
+
+param x_lo: f32;
+param x_hi: f32;
+param y_lo: f32;
+param y_hi: f32;
+
+param rows_per_pe: u32;
+
+const first_row = pe_y * rows_per_pe;
+const last_row = (pe_y + 1) * rows_per_pe;
+
+var row: u32 = first_row;
+var col: u32 = 0;
+
+// at some point in the future this should be a struct
+var packet = @zeros([3]f32);
+const mem_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{3} -> packet[i] });
+
+task send() void {
+
+  if (row == last_row) {
+    return;
+  }
+
+  const out = @get_dsd(fabout_dsd,
+              .{.fabric_color = out_color, .extent = 3, .output_queue = 1 });
+
+  const x: f32 = common.get_x(col, x_lo, x_hi, image_width);
+  const y: f32 = common.get_y(row, y_lo, y_hi, image_height);
+
+  packet[0] = x;
+  packet[1] = y;
+
+  // FIXME: iters should be an integer within a future packet struct
+  packet[2] = 0.0;
+
+  common.mandelbrot(max_iters, &packet[0], &packet[1], &packet[2], x, y);
+
+  @mov32(out, mem_dsd, .{ .async = true, .activate = send });
+
+  // prepare the next iteration that will be activated by .activate = send
+  col += 1;
+  if (col == image_width) {
+    row += 1;
+    col = 0;
+  }
+}
+
+comptime {
+  @bind_task(send, main_color);
+  @activate(main_color);
+}

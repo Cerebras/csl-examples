@@ -1,0 +1,654 @@
+////////////////////////////////////////////////////////////////////////////////
+// The code for this 3D 25-point stencil was inspired by the proprietary code //
+// of TotalEnergies EP Research & Technology US.                              //
+////////////////////////////////////////////////////////////////////////////////
+
+param send: color;
+
+param eastFin: color;
+param westFin: color;
+param northFin: color;
+param southFin: color;
+
+param eastDataFin: color;
+param westDataFin: color;
+param northDataFin: color;
+param southDataFin: color;
+
+param eastCtrlFin: color;
+param westCtrlFin: color;
+param northCtrlFin: color;
+param southCtrlFin: color;
+
+param eastChannel: color;
+param westChannel: color;
+param northChannel: color;
+param southChannel: color;
+
+param eastCtrlFin2: color;
+param westCtrlFin2: color;
+param northCtrlFin2: color;
+param southCtrlFin2: color;
+
+param tscColor: color;
+param iterColor: color;
+
+param isTscOutPe: bool;
+
+param zDim: u16;
+param pattern: u16;
+param peCount: u16;
+param isSourcePe: bool;
+
+const timestamp = @import_module("<time>");
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+var iterations: u32 = 0;
+
+param tallyParams: comptime_struct;
+
+const tally = @import_module("<kernels/tally/pe>", @concat_structs(tallyParams, .{
+  .output_queues = [2]u16 { 4, 5 }, // we use 0-3 from getParams()
+}));
+
+const zOffset: i16 = pattern - 1;
+const math = @import_module("<math>");
+
+var recvChunkCounter: i16 = 0;
+var sendChunkCounter: i16 = 0;
+
+const util = @import_module("util.csl");
+
+const maxChunks = util.computeChunks(zDim);
+const chunkSize = util.computeChunkSize(zDim, @as(u16, maxChunks));
+const paddedZDim = chunkSize * @as(u16, maxChunks);
+
+const routes = @import_module("routes.csl", .{
+  .pattern = pattern,
+  .peCount = peCount,
+});
+
+const consts = @import_module("consts.csl", .{
+  .pattern = pattern,
+  .paddedZDim = paddedZDim,
+});
+
+const xConsts = consts.computeMinimigConsts();
+const yConsts = consts.computeMinimigConsts();
+const zConsts = consts.computeMinimigConsts();
+
+param westFirst: bool;
+param westLast: bool;
+param westPatternId: u16;
+param westNotNeedsPos3: bool;
+param westPatternFirst: bool;
+param westPatternLast: bool;
+param westSenderCount: u16;
+
+param eastFirst: bool;
+param eastLast: bool;
+param eastPatternId: u16;
+param eastNotNeedsPos3: bool;
+param eastPatternFirst: bool;
+param eastPatternLast: bool;
+param eastSenderCount: u16;
+
+param northFirst: bool;
+param northLast: bool;
+param northPatternId: u16;
+param northNotNeedsPos3: bool;
+param northPatternFirst: bool;
+param northPatternLast: bool;
+param northSenderCount: u16;
+
+param southFirst: bool;
+param southLast: bool;
+param southPatternId: u16;
+param southNotNeedsPos3: bool;
+param southPatternFirst: bool;
+param southPatternLast: bool;
+param southSenderCount: u16;
+
+// Since our code essentially uses the same communication code with parameters
+// for the direction of the communication, we compute the subset of constants
+// that will be used by each instance of the communication code.  The boolean
+// value to `fetch*Consts()` function specifies whether the constant for the
+// element at the center should be included or not.  Since we want to include
+// the center element only once, we pass `true` only for the _first_ invocation
+// of this function, while all other values are false.
+const eastConsts = consts.fetchFirstHalfConsts(xConsts, true);
+const permutedEastConsts = consts.permuteConsts(eastPatternId, eastConsts);
+
+const westConsts = consts.fetchSecondHalfConsts(xConsts, false);
+const permutedWestConsts = consts.permuteConsts(westPatternId, westConsts);
+
+const southConsts = consts.fetchFirstHalfConsts(yConsts, false);
+const permutedSouthConsts = consts.permuteConsts(southPatternId, southConsts);
+
+const northConsts = consts.fetchSecondHalfConsts(yConsts, false);
+const permutedNorthConsts = consts.permuteConsts(northPatternId, northConsts);
+
+var accumulator = @zeros([paddedZDim]f32);
+var buffer = @zeros([4, pattern, chunkSize]f32);
+
+// The following array determines the seed value of the program.  For now, we
+// use all zeros to match the reference code.
+var zValues = consts.initBuffer();
+
+// We import a module that is parameterized on the direction of the
+// communication.  The following module handles eastward communication.
+const eastBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 0,
+  .dir = EAST,
+  .queueId = 0,
+  .dataFin = eastDataFin,
+  .ctrlFin = eastCtrlFin,
+  .channel = eastChannel,
+  .callback = eastFinTask,
+  .senderCount = eastSenderCount,
+  .ctrlCallback = eastCtrlFinTask,
+  .constants = &permutedEastConsts,
+});
+
+const westBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 1,
+  .dir = WEST,
+  .queueId = 1,
+  .dataFin = westDataFin,
+  .ctrlFin = westCtrlFin,
+  .channel = westChannel,
+  .callback = westFinTask,
+  .senderCount = westSenderCount,
+  .ctrlCallback = westCtrlFinTask,
+  .constants = &permutedWestConsts,
+});
+
+const southBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 2,
+  .dir = SOUTH,
+  .queueId = 2,
+  .dataFin = southDataFin,
+  .ctrlFin = southCtrlFin,
+  .channel = southChannel,
+  .callback = southFinTask,
+  .senderCount = southSenderCount,
+  .ctrlCallback = southCtrlFinTask,
+  .constants = &permutedSouthConsts,
+});
+
+const northBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 3,
+  .dir = NORTH,
+  .queueId = 3,
+  .dataFin = northDataFin,
+  .ctrlFin = northCtrlFin,
+  .channel = northChannel,
+  .callback = northFinTask,
+  .senderCount = northSenderCount,
+  .ctrlCallback = northCtrlFinTask,
+  .constants = &permutedNorthConsts,
+});
+
+var sendCount: u16 = 0;
+var recvCount: u16 = 0;
+var iterationCount: u32 = 0;
+
+var maxValue: f32 = 0.0;
+var minValue: f32 = 0.0;
+
+const accDsd = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> accumulator[i]
+});
+
+const zValuesDsd0 = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> zValues[0, zOffset + i]
+});
+
+const zValuesDsd1 = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> zValues[1, zOffset + i]
+});
+
+// This function is called when the program completes communication in any one
+// of the east, west, north, and south directions.
+fn recvFin() void {
+  recvCount += 1;
+
+  // Don't proceed until we've finished communicating in _all_ four directions.
+  if (recvCount != 4) {
+    return;
+  }
+
+  recvCount = 0;
+
+  // Each direction's communication module writes to a separate chunk of the
+  // buffer, so the following function call performs a sum reduction across all
+  // of these chunks.  This enables us to reuse this buffer for the next round
+  // of `chunkSize` communication without forcing us to allocate one large
+  // buffer for all chunks and for all four directions, which may require more
+  // memory than is available at any given PE.
+  reduceBuffer(recvChunkCounter * @as(i16, chunkSize));
+
+  // The above code multiplies the source data with constants for neighbors in
+  // the X and Y dimension, but we still need to multiply with the right
+  // constants in the Z dimension.  Here, we keep track of the number of chunks
+  // we've received so that we know when to start computing over the Z dim.
+  recvChunkCounter += 1;
+
+  // Note the difference in branch predicates below.  We want to continue
+  // receiving until we've received `chunkSize` values `maxChunks` number of
+  // times.  However, the condition for calling `epilog()`, which processes
+  // values in the Z dimension, checks whether we've finished _sending_.  This
+  // way, we ensure that the _both_ sending and receiving code is fully complete
+  // before we begin further processing.  This also ensures that only _one_ of
+  // the `recvFin()` or `sendFin()` functions calls the `epilog()` code.
+  if (recvChunkCounter != maxChunks) {
+    // Set the PE to again receive `chunkSize` values from all four directions.
+    startReceiving();
+  } else if (sendChunkCounter == maxChunks) {
+    // Remainder tasks after exchanging data in all four direction.
+    epilog();
+  }
+}
+
+// Just like the code to receive `chunkSize` elements need to be called for the
+// total number of chunks, the sending code is also called multiple times so
+// that each call sends `chunkSize` elements to its neighbors.
+fn sendFin() void {
+  sendCount += 1;
+
+  // Don't proceed until we've finished sending to all four neighbors.
+  if (sendCount != 4) {
+    return;
+  }
+
+  sendCount = 0;
+  sendChunkCounter += 1;
+
+  // Note the difference in branch predicates below.  We want to continue
+  // sending until we've sent `chunkSize` values `maxChunks` number of times.
+  // However, the condition for calling `epilog()`, which processes values in
+  // the Z dimension, checks whether we've finished _receiving_.  This way, we
+  // ensure that the _both_ sending and receiving code is fully complete before
+  // we begin further processing.  This also ensures that only _one_ of the
+  // `recvFin()` or `sendFin()` functions calls the `epilog()` code.
+  if (sendChunkCounter != maxChunks) {
+    startSending(sendChunkCounter * @as(i16, chunkSize));
+  } else if (recvChunkCounter == maxChunks) {
+    // Remainder tasks after exchanging data in all four direction.
+    epilog();
+  }
+}
+
+fn epilog() void {
+  // Multiply shifted versions of zValues with various constants, before
+  // accumulating them into `accumulator`.
+  scaleWithZConsts();
+
+  // Subtract the value from two iterations ago.  Since we want to keep track of
+  // values for _two_ iterations and not just the previous iterations, we toggle
+  // between `zValues[0, :]` and `zValues[1, :]`.
+  //
+  // Minimig - target_3d.c:30
+  // If iterationCount is even, `zValues[0, :]` contains `v[IDX3_l(i,j,k)]`
+  // and ``zValues[1, :]` contains `2.f*u[IDX3_l(i,j,k)]+vp[IDX3(i,j,k)]*lap`
+  // (and vice-versa if iterationCount is odd).
+  // This operation orresponds to `-v[IDX3_l(i,j,k)]` in:
+  // ```
+  // v[IDX3_l(i,j,k)] = 2.f*u[IDX3_l(i,j,k)]-v[IDX3_l(i,j,k)]+vp[IDX3(i,j,k)]*lap;
+  // ```
+  if (iterationCount & 1 == 0) {
+    @fsubs(zValuesDsd0, accDsd, zValuesDsd0);
+  } else {
+    @fsubs(zValuesDsd1, accDsd, zValuesDsd1);
+  }
+
+  // At this point, we've finished a single iteration's computation.  We now add
+  // the gaussian value to the wavefield, assuming this is the appropriate PE.
+  //
+  // Minimig - main.c:203 and data_setup.c:21-31
+  // ```
+  // kernel_add_source(grid, v, source, istep, sx, sy, sz);
+  // ```
+  //
+  if (isSourcePe) {
+    const thisIterationIdx = iterationCount & 1;
+    const offset = @as(u16, zOffset) + zDim / 2 - 5;
+    const source = consts.computeGaussianSource(iterationCount);
+    zValues[thisIterationIdx, offset] += source;
+  }
+
+  iterationCount += 1;
+
+  // Are we done yet?  If not, start the next iteration by triggering the send
+  // operation.
+  if (iterationCount < iterations) {
+    @activate(send);
+  } else {
+    // Now that we've finished executing the program, we have to perform four
+    // things:
+
+    // 1. Record the value of the timestamp counter, so that the host can
+    // compute the difference and determine the number of cycles per element.
+    timestamp.get_timestamp(&tscEndBuffer);
+    timestamp.disable_tsc();
+
+    // 2. Compute the minimum and maximum value of the wavefield for each PE's
+    // local data, so that the host can simply compute the min and max of these
+    // (reduced) values instead of computing the min and max over the entire
+    // wavefield.
+    maxValue = computeMaxValue();
+    minValue = computeMinValue();
+
+    // 3. Signal to the host that the device code has finished computing the
+    // results, and that the host is free to read each PE's memory.  The
+    // `signal_completion()` function talks to every PE used by the program to
+    // ensure a global termination.
+    tally.signal_completion();
+
+    // 4. Assuming this is the top-right PE, send the timestamp values as
+    // wavelets to the host.  In principle, this step isn't strictly necessary
+    // since the host can read the timestamp buffers from the PE's memory,
+    // however, we leave these as wavelets so that if we decide to remove the
+    // (expensive) step of reading the memory of all PEs, then we can still
+    // obtain the total execution time through the following wavelets.
+    if (isTscOutPe) {
+      const tscStartDsd = @get_dsd(mem1d_dsd, .{
+        .tensor_access = |i|{timestamp.tsc_size_words} -> tscStartBuffer[i]
+      });
+
+      const tscEndDsd = @get_dsd(mem1d_dsd, .{
+        .tensor_access = |i|{timestamp.tsc_size_words} -> tscEndBuffer[i]
+      });
+
+      const tscOutDsd = @get_dsd(fabout_dsd, .{
+        .fabric_color = tscColor,
+        .extent = timestamp.tsc_size_words,
+      });
+
+      @mov16(tscOutDsd, tscStartDsd);
+      @mov16(tscOutDsd, tscEndDsd);
+    }
+  }
+}
+
+// This function computes the maximum of the computed result.  It switches
+// between the two `zValues` buffers depending on the executed iteration count.
+//
+// Minimig - data_setup.cc:49
+fn computeMaxValue() f32 {
+  var maxValue:f32 = math.NEGATIVE_INF_f32;
+  const lastIterationIdx = 1 - (iterationCount & 1);
+
+  if (lastIterationIdx == 0) {
+    @fmaxs(&maxValue, maxValue, zValuesDsd0);
+  } else {
+    @fmaxs(&maxValue, maxValue, zValuesDsd1);
+  }
+
+  return maxValue;
+}
+
+// This function computes the _minimum_ of the computed result.  Since there is
+// no instruction for computing the minimum and because we want to use DSDs
+// (instead of a software loop), we first negate the result, compute the
+// maximum, and negate the computed maximum (before negating the source values
+// again so as to make this operation idempotent).
+//
+// Minimig - data_setup.cc:48
+fn computeMinValue() f32 {
+  var minValue:f32 = math.NEGATIVE_INF_f32;
+  const lastIterationIdx = 1 - (iterationCount & 1);
+
+  if (lastIterationIdx == 0) {
+    @fnegs(zValuesDsd0, zValuesDsd0);
+    @fmaxs(&minValue, minValue, zValuesDsd0);
+    @fnegs(zValuesDsd0, zValuesDsd0);
+  } else {
+    @fnegs(zValuesDsd1, zValuesDsd1);
+    @fmaxs(&minValue, minValue, zValuesDsd1);
+    @fnegs(zValuesDsd1, zValuesDsd1);
+  }
+
+  return -minValue;
+}
+
+// The following are tasks that are activated when (asynchronous) send and
+// receive operations in various directions complete.  Each task funnels to
+// either the `recvFin()` or the `sendFin()` function.  While it may _seem_
+// better to activate just one task instead of four, we cannot do so since the
+// hardware does not queue activations (instead, the hardware uses a single bit
+// to track task activations).  Thus, depending on the sequence of task
+// activations and executions, activating a task multiple times does not
+// guarantee that the said will execute multiple times.
+task eastFinTask() void {
+  recvFin();
+}
+
+task westFinTask() void {
+  recvFin();
+}
+
+task southFinTask() void {
+  recvFin();
+}
+
+task northFinTask() void {
+  recvFin();
+}
+
+task eastCtrlFinTask() void {
+  sendFin();
+}
+
+task westCtrlFinTask() void {
+  sendFin();
+}
+
+task southCtrlFinTask() void {
+  sendFin();
+}
+
+task northCtrlFinTask() void {
+  sendFin();
+}
+
+fn scaleWithZConsts() void {
+  @comptime_assert(pattern == 5);
+
+  // Ideally, we would express the following statements in a loop.  Since the
+  // loop bound is comptime-known, the compiler would then unroll the loop for
+  // us.  However, the current version of the compiler lacks the ability to
+  // unroll loops if the bounds are comptime-known, so the following code is the
+  // manually-unrolled version of the loop over `2 * pattern - 1`.
+  //
+  // Minimig - target_3d.c:3,6,9,12,15 and target_3d.c:30
+  // `vp` and `2u` are folded into `zConsts` so this corresponds to:
+  // ```
+  //  2.f*u[IDX3_l(i,j,k)] + vp * (coef0*u[IDX3_l(i,j,k)] \
+  //    +coefz[1]*(u[IDX3_l(i,j,k+1)]+u[IDX3_l(i,j,k-1)]) \
+  //    +coefz[2]*(u[IDX3_l(i,j,k+2)]+u[IDX3_l(i,j,k-2)]) \
+  //    +coefz[3]*(u[IDX3_l(i,j,k+3)]+u[IDX3_l(i,j,k-3)]) \
+  //    +coefz[4]*(u[IDX3_l(i,j,k+4)]+u[IDX3_l(i,j,k-4)]))
+  if (iterationCount & 1 != 0) {
+    const srcZ = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{zDim} -> zValues[0, i]
+    });
+    @fmacs(accDsd, accDsd, srcZ, zConsts[0]);
+
+    const srcZ1 = @increment_dsd_offset(srcZ, 1, f32);
+    @fmacs(accDsd, accDsd, srcZ1, zConsts[1]);
+
+    const srcZ2 = @increment_dsd_offset(srcZ, 2, f32);
+    @fmacs(accDsd, accDsd, srcZ2, zConsts[2]);
+
+    const srcZ3 = @increment_dsd_offset(srcZ, 3, f32);
+    @fmacs(accDsd, accDsd, srcZ3, zConsts[3]);
+
+    const srcZ5 = @increment_dsd_offset(srcZ, 5, f32);
+    @fmacs(accDsd, accDsd, srcZ5, zConsts[5]);
+
+    const srcZ6 = @increment_dsd_offset(srcZ, 6, f32);
+    @fmacs(accDsd, accDsd, srcZ6, zConsts[6]);
+
+    const srcZ7 = @increment_dsd_offset(srcZ, 7, f32);
+    @fmacs(accDsd, accDsd, srcZ7, zConsts[7]);
+
+    const srcZ8 = @increment_dsd_offset(srcZ, 8, f32);
+    @fmacs(accDsd, accDsd, srcZ8, zConsts[8]);
+  } else {
+    const srcZ = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{zDim} -> zValues[1, i]
+    });
+    @fmacs(accDsd, accDsd, srcZ, zConsts[0]);
+
+    const srcZ1 = @increment_dsd_offset(srcZ, 1, f32);
+    @fmacs(accDsd, accDsd, srcZ1, zConsts[1]);
+
+    const srcZ2 = @increment_dsd_offset(srcZ, 2, f32);
+    @fmacs(accDsd, accDsd, srcZ2, zConsts[2]);
+
+    const srcZ3 = @increment_dsd_offset(srcZ, 3, f32);
+    @fmacs(accDsd, accDsd, srcZ3, zConsts[3]);
+
+    const srcZ5 = @increment_dsd_offset(srcZ, 5, f32);
+    @fmacs(accDsd, accDsd, srcZ5, zConsts[5]);
+
+    const srcZ6 = @increment_dsd_offset(srcZ, 6, f32);
+    @fmacs(accDsd, accDsd, srcZ6, zConsts[6]);
+
+    const srcZ7 = @increment_dsd_offset(srcZ, 7, f32);
+    @fmacs(accDsd, accDsd, srcZ7, zConsts[7]);
+
+    const srcZ8 = @increment_dsd_offset(srcZ, 8, f32);
+    @fmacs(accDsd, accDsd, srcZ8, zConsts[8]);
+  }
+}
+
+fn reduceBuffer(offset: i16) void {
+  const bufferDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j,k|{4, pattern, chunkSize} -> buffer[i, j, k]
+  });
+
+  const accumulatorDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j,k|{4, pattern, chunkSize} -> accumulator[k]
+  });
+
+  // Minimig - target_3d.c:4-14
+  // This corresponds to the sum between each component of the laplacian
+  // over x and y (buffer contains data received from each neighbor in all
+  // 4 cardinal directions)
+  const dstDsd = @increment_dsd_offset(accumulatorDsd, offset, f32);
+  @fadds(dstDsd, dstDsd, bufferDsd);
+}
+
+fn startReceiving() void {
+  // Put the PE in the receive mode for all four directions.
+  eastBus.recvMode();
+  westBus.recvMode();
+  southBus.recvMode();
+  northBus.recvMode();
+}
+
+fn startSending(offset: i16) void {
+  // Asynchronously send data to neighbors in all four directions.
+  eastBus.send(iterationCount, offset);
+  westBus.send(iterationCount, offset);
+  southBus.send(iterationCount, offset);
+  northBus.send(iterationCount, offset);
+}
+
+fn startExchange() void {
+  // Reset the chunk counters since we will be exchanging all chunks now.
+  sendChunkCounter = 0;
+  recvChunkCounter = 0;
+
+  // We first need to put the PEs in receive mode before sending local data.
+  startReceiving();
+  startSending(0);
+}
+
+task sendTask() void {
+  @fmovs(accDsd, 0.0);
+  startExchange();
+}
+
+// This task is activated when the PE receives a wavelet on the color designated
+// for conveying the iteration count.  Once we set the global variable for the
+// iteration count, we start the timer and trigger the broadcast of the source
+// data to all the PE's neighbors.  A side effect of this design is that running
+// the code with a different iteration count simply requires sending a new
+// wavelet (with the new iteration count) from the host.
+task iterTask(data: u32) void {
+  iterations = data;
+
+  timestamp.enable_tsc();
+  timestamp.get_timestamp(&tscStartBuffer);
+  @activate(send);
+}
+
+comptime {
+  @bind_task(sendTask, send);
+  @bind_task(iterTask, iterColor);
+
+  // For each of the four direction, we block the color's task from being
+  // activated, since we will be using the fabric input DSD to receive such
+  // wavelets.  In other words, we don't want the wavelets to trigger the
+  // non-existed task for these wavelets.
+  @block(eastChannel);
+  @bind_task(eastFinTask, eastFin);
+
+  const eastRoute = routes.computeRoute(EAST, eastFirst, eastLast,
+      eastNotNeedsPos3, eastPatternFirst, eastPatternLast);
+  @set_local_color_config(eastChannel, eastRoute);
+
+  @block(westChannel);
+  @bind_task(westFinTask, westFin);
+
+  const westRoute = routes.computeRoute(WEST, westFirst, westLast,
+      westNotNeedsPos3, westPatternFirst, westPatternLast);
+  @set_local_color_config(westChannel, westRoute);
+
+  @block(southChannel);
+  @bind_task(southFinTask, southFin);
+
+  const southRoute = routes.computeRoute(SOUTH, southFirst, southLast,
+      southNotNeedsPos3, southPatternFirst, southPatternLast);
+  @set_local_color_config(southChannel, southRoute);
+
+  @block(northChannel);
+  @bind_task(northFinTask, northFin);
+
+  const northRoute = routes.computeRoute(NORTH, northFirst, northLast,
+      northNotNeedsPos3, northPatternFirst, northPatternLast);
+  @set_local_color_config(northChannel, northRoute);
+
+  @bind_task(eastCtrlFinTask, eastCtrlFin2);
+  @bind_task(westCtrlFinTask, westCtrlFin2);
+  @bind_task(northCtrlFinTask, northCtrlFin2);
+  @bind_task(southCtrlFinTask, southCtrlFin2);
+}

@@ -1,0 +1,103 @@
+////////////////////////////////////////////////////////////////////////////////
+// The code for this 3D 25-point stencil was inspired by the proprietary code //
+// of TotalEnergies EP Research & Technology US.                              //
+////////////////////////////////////////////////////////////////////////////////
+
+const util = @import_module("util.csl");
+
+param pattern: u16;
+param peCount: u16;
+
+fn initialSwitchPosition(pattFirst: bool, pattLast: bool) u16 {
+  if (pattern == 2) {
+    if (pattFirst) {
+      return 0;
+    }
+    return 2;
+  }
+  if (pattFirst) {
+    return 1;
+  }
+  if (pattLast) {
+    return 3;
+  }
+  return 0;
+}
+
+fn computeTxDir(dir: direction, isLast: bool) comptime_struct {
+  if (!isLast) {
+    return .{ dir, RAMP };
+  }
+  return .{ RAMP };
+}
+
+// The route when using a single neighbor is quite different from the route for
+// non-unit neighbors.  The next two functions compute routes for these two
+// cases.
+fn twoPatternRoute(dir: direction, pattFirst: bool, pattLast: bool,
+    isLast: bool) comptime_struct {
+  return .{
+    .routes = .{
+      .rx = .{ RAMP },
+      .tx = computeTxDir(dir, isLast),
+      .pop_mode = .{ .always_pop = true }
+      },
+    .switches = .{
+      .ring_mode = true,
+      .pos1 = .{ .tx = RAMP },
+      .pos2 = .{ .rx = util.oppositeDirection(dir) },
+      .current_switch_pos = initialSwitchPosition(pattFirst, pattLast, 2)
+    }
+  };
+}
+
+fn genericRoute(dir: direction, notNeedsPos3: bool, pattFirst: bool,
+    pattLast: bool, isLast: bool) comptime_struct {
+  // The first `pattern - 1` PEs always forward, unless they're at the edge.
+  const routes: comptime_struct = .{
+    .rx = .{ util.oppositeDirection(dir) },
+    .tx = computeTxDir(dir, isLast),
+    .pop_mode = .{ .always_pop = true }
+  };
+  const switches: comptime_struct = .{
+    .ring_mode = true,
+    .pos1 = .{ .rx = RAMP },
+    .pos2 = .{ .tx = RAMP }
+  };
+
+  if (notNeedsPos3) {
+    return .{ .routes = routes, .switches = switches};
+  }
+
+  return .{
+    .routes = routes,
+    .switches = @concat_structs(switches, .{
+      .pos3 = .{ .rx = util.oppositeDirection(dir) },
+      .current_switch_pos = initialSwitchPosition(pattFirst, pattLast)
+    })
+  };
+}
+
+// This is the top-level function for computing the routes and switches.
+fn computeRoute(dir: direction, isFirst: bool, isLast: bool, notNeedsPos3: bool,
+    pattFirst: bool, pattLast: bool) comptime_struct {
+  if (isFirst) {
+    // The first PE only sends, never receives.
+    return .{
+      .routes = .{
+        .rx = .{ RAMP },
+        .tx = .{ dir, RAMP },
+        .pop_mode = .{ .always_pop = true } },
+      .switches = .{
+        .ring_mode = true,
+        .pos1 = .{ .tx = RAMP }
+      }
+    };
+  }
+
+  if (pattern == 2) {
+    return twoPatternRoute(dir, pattFirst, pattLast, isLast);
+  }
+
+  return genericRoute(dir, notNeedsPos3, pattFirst, pattLast, isLast);
+}

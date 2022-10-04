@@ -12,8 +12,8 @@ change the program's compilation.
 
 This example defines a function ``fetchType()``, whose return type is ``type``,
 which is the type of all types.  Subsequently, when the code defines a new
-variable (``global``), it calls the ``fetchType()`` function to decide the type of
-the variable.
+variable (``global``), it calls the ``fetchType()`` function to decide the type
+of the variable.
 
 While this code uses an integer parameter, the programmer is free to declare
 parameters of other types such as floats, bools, or arrays.  However, the

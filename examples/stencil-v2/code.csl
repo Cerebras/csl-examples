@@ -1,0 +1,202 @@
+////////////////////////////////////////////////////////////////////////////////
+// The code for this 3D 25-point stencil was inspired by the proprietary code //
+// of TotalEnergies EP Research & Technology US.                              //
+////////////////////////////////////////////////////////////////////////////////
+
+// The following colors are set through the command line so that the script
+// compiling the program can reference the same color values during both
+// compilation as well as execution.
+param tallyOut: color;
+param tscColor: color;
+param iterColor: color;
+
+param send: color = @get_color(24);
+
+param eastFin: color = @get_color(25);
+param westFin: color = @get_color(26);
+param northFin: color = @get_color(27);
+param southFin: color = @get_color(28);
+
+param eastChannel: color = @get_color(0);
+param westChannel: color = @get_color(1);
+param northChannel: color = @get_color(2);
+param southChannel: color = @get_color(3);
+
+param eastDataFin: color = @get_color(4);
+param westDataFin: color = @get_color(5);
+param northDataFin: color = @get_color(6);
+param southDataFin: color = @get_color(7);
+
+param tallyC1: color = @get_color(11);
+param tallyC2: color = @get_color(12);
+param tallyC3: color = @get_color(13);
+
+param eastCtrlFin: color = @get_color(14);
+param westCtrlFin: color = @get_color(15);
+param northCtrlFin: color = @get_color(16);
+param southCtrlFin: color = @get_color(17);
+
+param eastCtrlFin2: color = @get_color(18);
+param westCtrlFin2: color = @get_color(19);
+param northCtrlFin2: color = @get_color(20);
+param southCtrlFin2: color = @get_color(21);
+
+param size: u16;
+param zDim: u16;
+
+// Number of neighbors (plus self) that each PE will communicate with in all
+// directions.  The (three-dimensional) stencil size is `6 * (pattern - 1) + 1`.
+const pattern: u16 = 5;
+
+// The coordinates of the "source" PE, which adds a small value to the wavefield
+// in each iteration.
+const srcX: u16 = size / 2 - 5;
+const srcY: u16 = size / 2 - 5;
+
+// The following parameters are the same for every PE, so we extract them out of
+// the loop that sets PE-specific parameters below.
+const invariants = .{
+  .send = send,
+  .zDim = zDim,
+  .peCount = size,
+  .pattern = pattern,
+
+  .eastFin = eastFin,
+  .westFin = westFin,
+  .northFin = northFin,
+  .southFin = southFin,
+  .tscColor = tscColor,
+  .iterColor = iterColor,
+
+  .eastDataFin = eastDataFin,
+  .westDataFin = westDataFin,
+  .northDataFin = northDataFin,
+  .southDataFin = southDataFin,
+
+  .eastCtrlFin = eastCtrlFin,
+  .westCtrlFin = westCtrlFin,
+  .northCtrlFin = northCtrlFin,
+  .southCtrlFin = southCtrlFin,
+
+  .eastCtrlFin2 = eastCtrlFin2,
+  .westCtrlFin2 = westCtrlFin2,
+  .northCtrlFin2 = northCtrlFin2,
+  .southCtrlFin2 = southCtrlFin2,
+
+  .eastChannel = eastChannel,
+  .westChannel = westChannel,
+  .northChannel = northChannel,
+  .southChannel = southChannel,
+};
+
+const util = @import_module("util.csl");
+
+const tally = @import_module("<kernels/tally/layout>", .{
+  .phase2_tally = 0,
+  .kernel_width = size,
+  .kernel_height = size,
+  .output_color = tallyOut,
+  .colors = [3]color { tallyC1, tallyC2, tallyC3 },
+});
+
+layout {
+  @comptime_assert(pattern > 1 and pattern < 8 and pattern <= size);
+  @set_rectangle(size, size);
+
+  for (@range(comptime_int, size)) |xId| {
+
+    // Fundamentally, we specify the communication pattern is just one
+    // (eastward) direction out of the four cardinal directions (east, west,
+    // north, and south).  We then mirror the communication pattern in all other
+    // directions using relative PE IDs.  For instance, westward communication
+    // is identical to eastward communication with decreasing X coordinates.
+    // Similarly, southward communication is the same as eastward communication,
+    // except using the Y coordinate instead of the X coordinate.
+
+    // Here we compute the relative coordinates for westward and eastward
+    // communication.
+    const westPeId = util.computeRelativePeId(xId, size, WEST);
+    const eastPeId = util.computeRelativePeId(xId, size, EAST);
+
+    const westParams = .{
+      .westFirst = westPeId == 0,
+      .westLast = westPeId == size - 1,
+      .westPatternId = westPeId % pattern,
+      .westNotNeedsPos3 = westPeId < pattern - 1,
+      .westPatternFirst = westPeId % pattern == 0,
+      .westPatternLast = westPeId % pattern == pattern - 1,
+      .westSenderCount = util.min(pattern, westPeId + 1),
+    };
+
+    const eastParams = .{
+      .eastFirst = eastPeId == 0,
+      .eastLast = eastPeId == size - 1,
+      .eastPatternId = eastPeId % pattern,
+      .eastNotNeedsPos3 = eastPeId < pattern - 1,
+      .eastPatternFirst = eastPeId % pattern == 0,
+      .eastPatternLast = eastPeId % pattern == pattern - 1,
+      .eastSenderCount = util.min(pattern, eastPeId + 1),
+    };
+
+    const hParams = @concat_structs(westParams, eastParams);
+
+    for (@range(comptime_int, size)) |yId| {
+
+      // Here we compute the relative coordinates for northward and southward
+      // communication.
+      const northPeId = util.computeRelativePeId(yId, size, NORTH);
+      const southPeId = util.computeRelativePeId(yId, size, SOUTH);
+
+      const northParams = .{
+        .northFirst = northPeId == 0,
+        .northLast = northPeId == size - 1,
+        .northPatternId = northPeId % pattern,
+        .northNotNeedsPos3 = northPeId < pattern - 1,
+        .northPatternFirst = northPeId % pattern == 0,
+        .northPatternLast = northPeId % pattern == pattern - 1,
+        .northSenderCount = util.min(pattern, northPeId + 1),
+      };
+
+      const southParams = .{
+        .southFirst = southPeId == 0,
+        .southLast = southPeId == size - 1,
+        .southPatternId = southPeId % pattern,
+        .southNotNeedsPos3 = southPeId < pattern - 1,
+        .southPatternFirst = southPeId % pattern == 0,
+        .southPatternLast = southPeId % pattern == pattern - 1,
+        .southSenderCount = util.min(pattern, southPeId + 1),
+      };
+
+      const vParams = @concat_structs(northParams, southParams);
+      const dirParams = @concat_structs(hParams, vParams);
+      const baseParams = @concat_structs(invariants, dirParams);
+
+      // The "tally" kernel serves to indicate termination of the execution on
+      // the chip, so that the host can freely read the device memory without
+      // worrying about memory corruption.
+      const tallyParams = tally.get_params(xId, yId);
+      const params = @concat_structs(.{
+        .tallyParams = tallyParams,
+        .isSourcePe = xId == srcX and yId == srcY,
+        .isTscOutPe = xId == size - 1 and yId == 0,
+      }, baseParams);
+
+      @set_tile_code(xId, yId, "task.csl", params);
+
+      if (xId < size - 1) {
+        @set_color_config(xId, yId, iterColor, .{
+            .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST } }
+          });
+      } else {
+        @set_color_config(xId, yId, iterColor, .{
+          .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } }
+        });
+      }
+    }
+  }
+
+  // The top-right PE sends the value of the timestamp counter back to the host.
+  @set_color_config(size - 1, 0, tscColor, .{
+    .routes = .{ .rx = .{ RAMP }, .tx = .{ NORTH } }
+  });
+}

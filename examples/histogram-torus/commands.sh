@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 cslc ./code.csl \
 --params=INPUT_SIZE:16,HIST_WIDTH:8,HIST_HEIGHT:8,NUM_BUCKETS:4,BUCKET_SIZE:2 \
 --colors=OUT_COLOR:8 \

@@ -1,0 +1,61 @@
+
+const common = @import_module("common.csl");
+
+const recv_task_color: color = @get_color(0);
+const process_task_color: color = @get_color(4);
+
+param pe_x: u32;
+param pe_y: u32;
+
+param in_color;
+param out_color;
+
+param image_height: u32;
+param image_width: u32;
+param max_iters: u32;
+
+param rows_per_pe: u32;
+
+var col: u32 = 0;
+var row: u32 = pe_y * rows_per_pe;
+
+var packet = @zeros([3]f32);
+const mem_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{3} -> packet[i] });
+
+param x_lo: f32;
+param x_hi: f32;
+param y_lo: f32;
+param y_hi: f32;
+
+task recv() void {
+  const in = @get_dsd(fabin_dsd,
+             .{.fabric_color = in_color, .extent = 3, .input_queue = 1 });
+  @mov32(mem_dsd, in, .{ .async = true, .activate = process });
+}
+
+task process() void {
+
+  const x = common.get_x(col, x_lo, x_hi, image_width);
+  const y = common.get_y(row, y_lo, y_hi, image_height);
+
+  common.mandelbrot(max_iters, &packet[0], &packet[1], &packet[2], x, y);
+
+  col += 1;
+  if (col == image_width) {
+    row += 1;
+    col = 0;
+  }
+
+  const out = @get_dsd(fabout_dsd,
+              .{.fabric_color = out_color, .extent = 3, .output_queue = 1 });
+  @mov32(out, mem_dsd, .{ .async = true, .activate = recv });
+}
+
+comptime {
+  @bind_task(recv, recv_task_color);
+  @activate(recv_task_color);
+
+  @bind_task(process, process_task_color);
+
+  @block(in_color);
+}

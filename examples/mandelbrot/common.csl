@@ -1,0 +1,30 @@
+const math = @import_module("<math>");
+
+fn get_x(c: u32, x_lo: f32, x_hi: f32, cols: u32) f32 {
+  return @as(f32, c) * (x_hi - x_lo) / @as(f32, cols - 1)  + x_lo;
+}
+
+fn get_y(r: u32, y_lo: f32, y_hi: f32, rows: u32) f32 {
+  return @as(f32, r) * (y_hi - y_lo) / @as(f32, rows - 1)  + y_lo;
+}
+
+fn mandelbrot(max_iters: u32, rp: *f32, ip: *f32, iters: *f32, x: f32, y: f32) void {
+
+  for (@range(u32, max_iters)) |i| {
+
+    const real = rp.*;
+    const imag = ip.*;
+
+    if (math.sqrt_f32(real * real + imag * imag) > 2.0) {
+      break;
+    }
+
+    rp.* = real * real - imag * imag;
+    ip.* = real * imag + real * imag;
+
+    rp.* += x;
+    ip.* += y;
+
+    iters.* += 1.0;
+  }
+}

@@ -1,20 +1,5 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
 """ Compute |b-A*x| using a 2-by-2 PE rectangle
 
    The 2-by-2 rectangle is surrounded by a halo of size 1.
@@ -54,6 +39,7 @@
 
 import os
 import argparse
+import sys
 from glob import glob
 from typing import List, Optional
 import numpy as np
@@ -81,7 +67,7 @@ def parse_args():
       "--cslc",
       required=False,
       default=CSLC,
-      help="The path to the csl compiler. Defaults to '" + CSLC + "'",
+      help=f"The path to the csl compiler. Defaults to '{CSLC}'",
   )
   parser.add_argument(
       "-c", "--compile", action="store_true", help="Compile the code."
@@ -113,9 +99,9 @@ def csl_compile(name: str, compile_flag: bool, cslc: str, LOCAL_OUT_SZ: int, LOC
     result = os.system(csl_cmd)
     if result > 0:
       print("ERROR: CSL fails\n")
-      exit(1)
+      sys.exit(1)
   else:
-    print(f"MUST CHECK: no -c flag, the user has to compile layout.csl with above command")
+    print("MUST CHECK: no -c flag, the user has to compile layout.csl with above command")
 
   pes = glob(f"{name}/bin/out_[0-9]*.elf")
 
@@ -196,7 +182,7 @@ def main():
     width, height, code_csl)
 
   # run simulation
-  nrm_r_cs = run(args.name, elf_list, width, height, A, M, N, x, b,
+  nrm_r_cs = run(elf_list, width, height, A, M, N, x, b,
                  args.cmaddr)
 
   print(f"`nrm_r`     from CPU:\n{nrm_r}")
@@ -209,7 +195,7 @@ def main():
   print("\nSUCCESS!")
 
 
-def run(name: str, elf_list: List[str], width: int, height: int, A: np.ndarray, M: int, N: int, \
+def run(elf_list: List[str], width: int, height: int, A: np.ndarray, M: int, N: int, \
     x: np.ndarray, b: np.ndarray, cmaddr: Optional[str]) -> np.ndarray:
   """setup input/output ports
      run simulation
@@ -271,8 +257,7 @@ def run(name: str, elf_list: List[str], width: int, height: int, A: np.ndarray, 
 
   # Run the computation on a simulated wafer or "simfabric".
   # This is a blocking call that stops when all output tensors are received.
-  sim_out_path = f"{name}/bin/core.out"
-  runner.connect_and_run(sim_out_path)
+  runner.connect_and_run()
 
   nrm_r_cs = runner.out_tensor_dict["nrm_r"]
 

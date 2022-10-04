@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 cslc ./layout.csl --fabric-dims=4,4 \
 --fabric-offsets=1,1 \
 --params=LOCAL_OUT_SZ:3,LOCAL_IN_SZ:2 -o out

@@ -1,0 +1,109 @@
+////////////////////////////////////////////////////////////////////////////////
+// The code for this 3D 25-point stencil was inspired by the proprietary code //
+// of TotalEnergies EP Research & Technology US.                              //
+////////////////////////////////////////////////////////////////////////////////
+
+param pattern: u16;
+param paddedZDim: u16;
+
+const math = @import_module("<math>");
+
+// We need to allocate space for not just the (padded) size of the problem (in
+// the Z dimension), but also space for ghost cells.
+const zBufferSize = paddedZDim + 2 * (pattern - 1);
+
+fn initBuffer() [2, zBufferSize]f32 {
+  return @zeros([2, zBufferSize]f32);
+}
+
+// Minimig - main.c:15-23, target_3d.c:23, and target_3d.c:30
+// As seen below, `vp` and `2*u` are folded into the constants
+fn computeMinimigConsts() [9]f32 {
+  @comptime_assert(pattern == 5);
+  const vp_all: f32 = 10.3703699112;
+
+  return [9]f32 {
+    vp_all * -0.0000044643,
+    vp_all *  0.0000634921,
+    vp_all * -0.0005000000,
+    vp_all *  0.0040000002,
+    vp_all * -0.0071180556 * 3.0 + 2.0,
+    vp_all *  0.0040000002,
+    vp_all * -0.0005000000,
+    vp_all *  0.0000634921,
+    vp_all * -0.0000044643,
+  };
+}
+
+// `computeMinimigConsts()` computes constants in both the positive as well as
+// negative direction of the X, Y, and Z dimensions.  However, for any given
+// axis, our implementation splits communication and computation into two, one
+// for the positive direction and another for the negative direction.  This
+// function extracts the first half of the constants, and optionally includes
+// the center element.
+fn fetchFirstHalfConsts(consts: [2 * pattern - 1]f32, self: bool) [pattern]f32 {
+  var idx: u16 = 0;
+  var result = @zeros([pattern]f32);
+
+  if (!self) {
+    idx += 1;
+  }
+
+  while (idx < pattern) : (idx += 1) {
+    result[idx] = consts[pattern - idx - 1];
+  }
+
+  return result;
+}
+
+fn fetchSecondHalfConsts(consts: [2 * pattern - 1]f32, self: bool) [pattern]f32 {
+  var idx: u16 = 0;
+  var result = @zeros([pattern]f32);
+
+  if (!self) {
+    idx += 1;
+  }
+
+  while (idx < pattern) : (idx += 1) {
+    result[idx] = consts[pattern + idx - 1];
+  }
+
+  return result;
+}
+
+// The sequence in which each PE receives wavelets from its neighbors depends
+// on the relative placement of the PE within each group of `pattern` PEs.  This
+// function reorders the constants to match the sequence of source PE IDs so
+// that we multiply the incoming data with the right constants.
+fn permuteConsts(pattId: u16, originalConsts: [pattern]f32) [pattern]f32 {
+  const start = pattId;
+  var result = @zeros([pattern]f32);
+
+  var idx: u16 = 0;
+  while (idx < pattern) : (idx += 1) {
+    var value: f32 = 0.0;
+    if (start < idx) {
+      value = originalConsts[(start + pattern) - idx];
+    } else {
+      value = originalConsts[start - idx];
+    }
+
+    result[idx] = value;
+  }
+
+  return result;
+}
+
+// Minimig - main.c:38-50
+// This corresponds to one iteration of the `for` loop at line 44
+// in `gaussian_source(uint nt, float dt, float *restrict source)`
+fn computeGaussianSource(iterationIdx: u32) f32 {
+  const _fmax: f32 = 25.0;
+  const dt: f32 = 0.0016101530;
+  const sigma: f32 = 0.6 * _fmax;
+  const t = dt * @as(f32, iterationIdx);
+  const squared = (sigma * t - 1.0) * (sigma * t - 1.0);
+
+  return -2.0 * 8.0 * sigma * (sigma - 2.0 * sigma * 8.0 * squared) *
+      math.exp_f32(-8.0 * squared);
+}
