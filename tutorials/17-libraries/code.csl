@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+param iterations: u32;
+
 const mainColor: color = @get_color(0);
 const resultColor: color = @get_color(1);
 const timeStampColor: color = @get_color(2);
@@ -61,8 +63,6 @@ task mainTask() void {
   var idx: u32 = 0;
   var hitCount: u32 = 0;
 
-  const iterations = 10000;
-
   tsc.enable_tsc();
   tsc.get_timestamp(&startBuffer);
 
@@ -90,8 +90,8 @@ comptime {
 
 layout {
   @set_rectangle(1, 1);
-  @set_tile_code(0, 0, "code.csl");
+  @set_tile_code(0, 0, "code.csl", .{ .iterations = iterations } );
 
-  @set_color_config(0, 0, resultColor, .{.rx = .{ RAMP }, .tx = .{ EAST }});
-  @set_color_config(0, 0, timeStampColor, .{.rx = .{ RAMP }, .tx = .{ EAST }});
+  @set_color_config(0, 0, resultColor, .{.routes = .{.rx = .{ RAMP }, .tx = .{ EAST }}});
+  @set_color_config(0, 0, timeStampColor, .{.routes = .{.rx = .{ RAMP }, .tx = .{ EAST }}});
 }

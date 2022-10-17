@@ -1,0 +1,235 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param HIST_WIDTH:i16;
+param INPUT_SIZE:u32;
+param N_BUCKETS:u32;
+param BUCKET_SIZE:u32;
+
+param tally_params:comptime_struct;
+
+const START: color = @get_color(24);
+const SENDER_WE: color = @get_color(2);
+
+const MIN_CAP:u16 = 4;
+const MIN_CAPm1:u16 = MIN_CAP - 1;
+
+const timestamp = @import_module("<time>");
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+param w_to_e: color;
+param e_to_w: color;
+param n_to_s: color;
+param s_to_n: color;
+
+// inputs, PE_X, and PE_Y are all expected to be initialized late via elf file
+var inputs:[INPUT_SIZE]u32 = @zeros([INPUT_SIZE]u32);
+var PE_X:u32 = 0;
+var PE_Y:u32 = 0;
+var PE_Xp1:u32 = 0;
+
+var buckets:[N_BUCKETS]u32 = @zeros([N_BUCKETS]u32);
+
+var stage_turn_e = @zeros([1]u32);
+var stage_turn_w = @zeros([1]u32);
+const stage_turn_e_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_turn_e[i]});
+const stage_turn_w_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_turn_w[i]});
+
+var stage_input_n = @zeros([1]u32);
+var stage_input_w = @zeros([1]u32);
+var stage_input_s = @zeros([1]u32);
+var stage_input_e = @zeros([1]u32);
+
+const stage_input_n_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_input_n[i]});
+const stage_input_s_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_input_s[i]});
+const stage_input_w_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_input_w[i]});
+const stage_input_e_dsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_input_e[i]});
+
+const send_s_dsd = @get_dsd(fabout_dsd, .{.fabric_color=n_to_s, .extent=1, .output_queue = 0});
+const send_n_dsd = @get_dsd(fabout_dsd, .{.fabric_color=s_to_n, .extent=1, .output_queue = 1});
+
+const send_e_dsd = @get_dsd(fabout_dsd, .{.fabric_color=w_to_e, .extent=1, .output_queue = 2});
+const send_w_dsd = @get_dsd(fabout_dsd, .{.fabric_color=e_to_w, .extent=1, .output_queue = 3});
+
+// minimum FIFO_SIZE is 2
+const FIFO_BITS : u16 = 8; // Size = 256
+const FIFO_SIZE : u16 = @as(i16, (@as(u16, 1) << FIFO_BITS));
+const FIFO_MASK : u16 = FIFO_SIZE - 1;
+
+var fifo_we : [FIFO_SIZE]u32 = @zeros([FIFO_SIZE]u32);
+var fifo_we_head : u16 = 0;
+var fifo_we_tail : u16 = 0;
+var fifo_we_cap : u16 = FIFO_MASK;
+
+task sender_we() void {
+  // if empty check
+  if (fifo_we_tail == fifo_we_head) {
+    @block(SENDER_WE);
+    @activate(SENDER_WE);
+  } else {
+    var waveletx:u32 = fifo_we[fifo_we_head];
+    fifo_we_head = (fifo_we_head + 1) & FIFO_MASK;
+
+    // Indicate that there that queue has now space to accept more
+    if (fifo_we_cap==MIN_CAPm1){
+      @unblock(n_to_s); @unblock(s_to_n);
+    }
+
+    fifo_we_cap+=1;
+
+    var pe_x:u32 = (waveletx >> 22) -1;
+    if (pe_x < PE_X) {
+      stage_turn_w[0] = waveletx;
+      @mov32(send_w_dsd, stage_turn_w_dsd, .{.async=true, .activate=sender_we});
+    } else if (pe_x > PE_X) {
+      stage_turn_e[0] = waveletx;
+      @mov32(send_e_dsd, stage_turn_e_dsd, .{.async=true, .activate=sender_we});
+    }
+  }
+}
+
+task handle_N(wavelety:u32) void {
+  treat_Y(wavelety);
+}
+task handle_S(wavelety:u32) void {
+  treat_Y(wavelety);
+}
+
+fn add_to_fifo(data:u32) void{
+  // Copy the wavelet to fifo_we. The fifo is assumed to have space.
+  fifo_we[fifo_we_tail] = data;
+  fifo_we_tail = (fifo_we_tail + 1) & FIFO_MASK;
+
+  if (fifo_we_cap==MIN_CAP){ //Last entry
+    @block(n_to_s); @block(s_to_n);
+  }
+
+  // Indicate that there is something in the queue to send
+  fifo_we_cap-=1;
+  @unblock(SENDER_WE);
+}
+
+
+fn treat_Y (wavelety:u32) void {
+  var bucket:u32 = (wavelety << 20) >> 20;
+  var x:u32 = (wavelety << 10) >> 22;
+  if ( x != PE_Xp1 ) {
+    add_to_fifo( ((x << 22) | bucket) );
+  } else{
+    keep(bucket);
+  }
+}
+
+// rx on E/W
+task handle_E(waveletx:u32) void {keep( (waveletx << 20) >> 20 );}
+task handle_W(waveletx:u32) void {keep( (waveletx << 20) >> 20 );}
+
+// Turns a raw wavelet into a first hop packed wavelet. This looks like:
+// |---10(y)---|---10(x)---|----12(bucket)----|
+// PEs only need to look at the y-coordinate before re-packing for second hop.
+fn pack_wavelet_hop_vertical(x:u32, y:u32, bucket_id:u32) u32 {
+  return (y << 22) | (x << 12) | bucket_id;
+}
+fn pack_wavelet_hop_horizontal(x:u32, bucket_id:u32) u32 {
+  return (x << 22) | bucket_id;
+}
+
+const tally = @import_module("<kernels/tally/pe>",
+  @concat_structs(tally_params, .{
+    .output_queues=[2]u16{4, 5}, // we use 0-3 above
+  }));
+
+fn keep(bucket:u32) void {
+  buckets[bucket] += 1;
+  tally.bump_tally(1);
+}
+
+var i:u32 = 0;
+task process_inputs() void {
+  if (i==0){
+    PE_Xp1 = PE_X + 1;
+
+    const address1: u16 = 0x7F3C * 2;
+    const address2: u16 = 0x7F3D * 2;
+
+    var j:u32 = 0;
+    // Need to perform the following while loop with full len (commented out) when running on CS2,
+    // since it should guarantee that the registers are written before any PE starts sending wavelets
+    var len:u32 = 1; //0x7FFF << 16;
+    while (j<len){
+      @bitcast(*u16, address1).* = 0x2000 | @as(u16, PE_X+1);
+      @bitcast(*u16, address2).* = @as(u16, PE_Y+1);
+      j+=1;
+    }
+
+    timestamp.enable_tsc();
+    timestamp.get_timestamp(&tscStartBuffer);
+    timestamp.get_timestamp(&tscEndBuffer);
+  }
+
+  var value = inputs[i];
+  var _r1 = value / BUCKET_SIZE;
+  var bucket_id = _r1 % N_BUCKETS; // this is 12 bits i.e. up to 4096
+  var _r2 = _r1 / N_BUCKETS;
+  var pe_x = _r2 % @as(u32, HIST_WIDTH); // this can be up to 1024 i.e.
+  var pe_y = _r2 / @as(u32, HIST_WIDTH); // this can take up to 10 bits
+
+  if (pe_y < PE_Y) {
+    @block(START);
+    stage_input_n[0] = pack_wavelet_hop_vertical(pe_x+1, pe_y+1, bucket_id);
+    @mov32(send_n_dsd, stage_input_n_dsd, .{.async=true, .unblock=process_inputs});
+    i += 1;
+  } else if (pe_y > PE_Y) {
+    @block(START);
+    stage_input_s[0] = pack_wavelet_hop_vertical(pe_x+1, pe_y+1, bucket_id);
+    @mov32(send_s_dsd, stage_input_s_dsd, .{.async=true, .unblock=process_inputs});
+    i += 1;
+  } else if (pe_x != PE_X) {
+    if (fifo_we_cap > MIN_CAP){
+      add_to_fifo(pack_wavelet_hop_horizontal(pe_x+1, bucket_id));
+      i += 1;
+    }
+  } else{
+    keep(bucket_id); i += 1;
+  }
+
+  if (i < INPUT_SIZE) {
+      @activate(START);
+  } else {
+    tally.signal_completion();
+    timestamp.get_timestamp(&tscEndBuffer);
+    timestamp.disable_tsc();
+  }
+}
+
+comptime {
+  @bind_task(process_inputs, START);
+  @activate(START);
+
+  @bind_task(sender_we, SENDER_WE);
+  @block(SENDER_WE);
+  @activate(SENDER_WE);
+
+  // Receive task N/S
+  @bind_task(handle_N, n_to_s);
+  @bind_task(handle_S, s_to_n);
+  @unblock(n_to_s);
+  @unblock(s_to_n);
+  @unblock(w_to_e);
+  @unblock(e_to_w);
+  // Receive task WE
+  @bind_task(handle_W, w_to_e);
+  @bind_task(handle_E, e_to_w);
+}

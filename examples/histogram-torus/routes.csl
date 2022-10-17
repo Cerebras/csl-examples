@@ -99,42 +99,42 @@ fn get_colors_ns(pe:i16) comptime_struct {
 // See routing logic described in comment on get_colors_ns.
 fn set_routes(col:i16, row:i16, pe:i16) void {
   if (pe == 0) { // first PE
-    @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
-    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
+    @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ TO } } });
+    @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ TO }, .tx = .{ RAMP } } });
   } else if (pe == LAST_PE) { // last PE
     if (LAST_PE % 4 == 1) {
-      @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
-      @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+      @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
+      @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
     } else if (LAST_PE % 4 == 2) {
-      @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
-      @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+      @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
+      @set_color_config(col, row, c3, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
     } else if (LAST_PE % 4 == 3) {
-      @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
-      @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+      @set_color_config(col, row, c2, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
+      @set_color_config(col, row, c3, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
     } else {
-      @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
-      @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+      @set_color_config(col, row, c2, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
+      @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
     }
   } else if (pe % 4 == 1) { // odd PE
-    @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ RAMP } });
-    @set_color_config(col, row, c4, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
+    @set_color_config(col, row, c3, .{ .routes = .{ .rx = .{ TO }, .tx = .{ RAMP } } });
+    @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
     // pass thru
-    @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ TO } });
+    @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ TO } } });
   } else if (pe % 4 == 2) { // even PE
-    @set_color_config(col, row, c1, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
-    @set_color_config(col, row, c2, .{ .rx = .{ RAMP }, .tx = .{ TO } });
+    @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
+    @set_color_config(col, row, c2, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ TO } } });
     // pass thru
-    @set_color_config(col, row, c3, .{ .rx = .{ TO }, .tx = .{ FROM } });
+    @set_color_config(col, row, c3, .{ .routes = .{ .rx = .{ TO }, .tx = .{ FROM } } });
   } else if (pe % 4 == 3) { // odd PE alternate
-    @set_color_config(col, row, c3, .{ .rx = .{ RAMP }, .tx = .{ FROM } });
-    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ RAMP } });
+    @set_color_config(col, row, c3, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ FROM } } });
+    @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ TO }, .tx = .{ RAMP } } });
     // pass thru
-    @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ TO } });
+    @set_color_config(col, row, c2, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ TO } } });
   } else { // even PE alternate
-    @set_color_config(col, row, c1, .{ .rx = .{ RAMP }, .tx = .{ TO } });
-    @set_color_config(col, row, c2, .{ .rx = .{ FROM }, .tx = .{ RAMP } });
+    @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ TO } } });
+    @set_color_config(col, row, c2, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ RAMP } } });
     // pass thru
-    @set_color_config(col, row, c4, .{ .rx = .{ TO }, .tx = .{ FROM } });
+    @set_color_config(col, row, c4, .{ .routes = .{ .rx = .{ TO }, .tx = .{ FROM } } });
   }
 }
 

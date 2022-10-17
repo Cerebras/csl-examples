@@ -130,6 +130,6 @@ layout {
     .triggerColor = triggerColor,
   });
 
-  @set_color_config(0, 0, recvColor, .{ .rx = .{ WEST }, .tx = .{ RAMP } });
-  @set_color_config(0, 0, outputColor, .{ .rx = .{ RAMP }, .tx = .{ WEST } });
+  @set_color_config(0, 0, recvColor, .{ .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } } });
+  @set_color_config(0, 0, outputColor, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } } });
 }

@@ -25,9 +25,8 @@ parser.add_argument("--cmaddr", help="IP:port for CS system")
 args = parser.parse_args()
 name = args.name
 
-# Path to ELF and simulation output files
+# Path to ELF files
 elf_paths = [f"{name}/bin/out_0_0.elf"]
-sim_out_path = f"{name}/bin/core.out"
 
 runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
@@ -52,7 +51,7 @@ output_port_map = f"{{out_tensor[idx=0:{max_idx}] -> [PE[1,0] -> index[idx]]}}"
 runner.add_output_tensor(outColor, output_port_map, np.int16)
 
 # Run on the simulator
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 
 # Ensure that the result matches expectations
 result_tensor = runner.out_tensor_dict["out_tensor"]

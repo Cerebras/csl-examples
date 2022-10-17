@@ -26,11 +26,10 @@ parser.add_argument("--cmaddr", help="IP:port for CS system")
 args = parser.parse_args()
 name = args.name
 
-# Path to ELF and simulation output files
+# Path to ELF files
 elf_paths = [f"{name}/bin/out_0_0.elf"]
-sim_out_path = f"{name}/bin/core.out"
 
-# Simulate ELF file and produce the simulation output
+# Simulate ELF files
 runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
 # Color along which we expect the output message
@@ -43,7 +42,7 @@ output_port_map = f"{{out_tensor[idx=0:{max_idx}] -> [PE[1,0] -> index[idx]]}}"
 runner.add_output_tensor(output_color, output_port_map, np.int16)
 
 # Proceed with simulation; fetch the output wavelets once simulation completes
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 result_tensor = runner.out_tensor_dict["out_tensor"]
 
 expected = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]

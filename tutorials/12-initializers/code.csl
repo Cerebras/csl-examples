@@ -42,5 +42,5 @@ layout {
   @set_tile_code(0, 0, "code.csl");
 
   const outputRoute = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-  @set_color_config(0, 0, outputColor, outputRoute);
+  @set_color_config(0, 0, outputColor, .{ .routes = outputRoute });
 }

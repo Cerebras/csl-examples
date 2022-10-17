@@ -43,9 +43,8 @@ def wordsToInt(words):
   byteList = b''.join(int(word).to_bytes(2, 'little') for word in words)
   return int.from_bytes(byteList, 'little')
 
-# Path to ELF and simulation output files
+# Path to ELF files
 elf_paths = [f"{name}/bin/out_0_0.elf"]
-sim_out_path = f"{name}/bin/core.out"
 
 # Set the seed so that CI results are deterministic
 np.random.seed(seed=7)
@@ -59,7 +58,7 @@ tensors = np.concatenate([intToWords(left), intToWords(right)])
 
 # Parse the compile metadata
 compile_data = None
-with open(f"{name}/out.json") as json_file:
+with open(f"{name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
 assert compile_data is not None
 compile_colors = compile_data["colors"]
@@ -71,11 +70,11 @@ runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
 runner.add_input_tensor(receiveColor, ("WEST", 0), tensors, sentinel=triggerColor)
 
-output_port_map = f"{{out_tensor[idx=0:15] -> [PE[-1,0] -> index[idx]]}}"
+output_port_map = "{out_tensor[idx=0:15] -> [PE[-1,0] -> index[idx]]}"
 runner.add_output_tensor(outputColor, output_port_map, np.uint16)
 
 # Simulate ELF file and wait for the program to complete
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 
 # Read the result from the output
 result = wordsToInt(runner.out_tensor_dict["out_tensor"])

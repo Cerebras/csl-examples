@@ -34,8 +34,8 @@ task rxTask(data: u16) void {
 
 comptime {
   @bind_task(rxTask, rxColor);
-  @set_local_color_config(rxColor, .{ .rx = .{ inDir }, .tx = .{ RAMP } });
+  @set_local_color_config(rxColor, .{.routes = .{ .rx = .{ inDir }, .tx = .{ RAMP } } });
 
   const outRoute = .{ .rx = .{ RAMP }, .tx = .{ NORTH } };
-  @set_local_color_config(outColor, outRoute);
+  @set_local_color_config(outColor, .{.routes = outRoute});
 }

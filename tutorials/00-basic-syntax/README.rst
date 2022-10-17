@@ -29,12 +29,12 @@ Functions
 ---------
 
 Functions are declared using the ``fn`` keyword.  The compiler provides special
-functions called *Builtins*, whose names start with ``@`` and whose implementation
-is provided by the compiler.  All CSL builtins are described
+functions called *Builtins*, whose names start with ``@`` and whose
+implementation is provided by the compiler.  All CSL builtins are described
 `here <../../Language/Builtins.rst>`_.
 
 Conditional Statements and Loops
 --------------------------------
 
-CSL includes support for ``if`` statements and ``while`` and ``for`` loops.  These
-are described in greater detail in the subsequent examples.
+CSL includes support for ``if`` statements and ``while`` and ``for`` loops.
+These are described in greater detail in the subsequent examples.

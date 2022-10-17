@@ -56,8 +56,7 @@ output_port_map = f"{{out_tensor[idx=0:{max_idx}] -> [PE[idx,1] -> index[idx]]}}
 runner.add_output_tensor(output_color, output_port_map, np.float16)
 
 # Proceed with simulation; fetch the output wavelets once simulation completes
-sim_out_path = f"{name}/bin/core.out"
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 result_tensor = runner.out_tensor_dict["out_tensor"]
 
 expected = np.sqrt(input_tensor)

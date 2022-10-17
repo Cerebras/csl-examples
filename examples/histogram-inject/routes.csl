@@ -1,0 +1,56 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param FIRST_COLOR:u16;
+param LAST_PE:i16;
+param FROM:direction;
+param PRI:i16;
+
+const color_step: u16 = 4;
+
+const c0: color = @get_color(FIRST_COLOR);
+const c1: color = @get_color(FIRST_COLOR + color_step);
+
+fn flip(d:direction) direction {
+  @comptime_assert(d != RAMP);
+  if (d == NORTH) {
+    return SOUTH;
+  }
+  if (d == SOUTH) {
+    return NORTH;
+  }
+  if (d == WEST) {
+    return EAST;
+  }
+  // d == EAST
+  return WEST;
+}
+
+fn next_available_color() u16 {
+  return FIRST_COLOR + color_step*2;
+}
+
+const TO:direction = flip(FROM);
+
+fn get_colors_ns(pe:i16) comptime_struct {
+  return .{ .n_to_s = c0, .s_to_n = c1 };
+}
+fn set_routes(col:i16, row:i16, pe:i16) void {
+  const switches = .{.ce_inject = .{.priority = PRI}};
+  @set_color_config(col, row, c0, .{ .routes = .{ .rx = .{ FROM }, .tx = .{ TO   }, .p2p = true}, .switches = switches });
+  @set_color_config(col, row, c1, .{ .routes = .{ .rx = .{ TO },   .tx = .{ FROM }, .p2p = true}, .switches = switches });
+}
+fn get_colors_we(pe:i16) comptime_struct {
+  return .{ .w_to_e = c0, .e_to_w = c1 };
+}
