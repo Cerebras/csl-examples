@@ -32,9 +32,9 @@ layout {
   @set_tile_code(0, 0, "code.csl");
 
   const route = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
-  @set_color_config(0, 0, main_color, route);
+  @set_color_config(0, 0, main_color, .{ .routes = route });
 
   // Configure the wavelet route for the output message
   const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-  @set_color_config(0, 0, output_color, output_route);
+  @set_color_config(0, 0, output_color, .{ .routes = output_route });
 }

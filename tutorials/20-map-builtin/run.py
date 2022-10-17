@@ -21,7 +21,6 @@ from glob import glob
 import numpy as np
 
 from cerebras.elf.cs_elf_runner import CSELFRunner
-from cerebras.elf.cself import ELFLoader
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', help='the test name')
@@ -29,11 +28,10 @@ parser.add_argument('--cmaddr', help='IP:port for CS system')
 args = parser.parse_args()
 name = args.name
 
-# Path to ELF and simulation output files
+# Path to ELF files
 elf_paths = glob(f"{name}/bin/out_*.elf")
-sim_out_path = f"{name}/bin/core.out"
 
-# Simulate ELF file and produce the simulation output
+# Simulate ELF files
 runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
 A = np.array([[42.0, 42.0, 42.0, 42.0, 42.0],
@@ -53,7 +51,7 @@ np.random.seed(seed=7)
 
 # Parse the compile metadata
 compile_data = None
-with open(f"{name}/out.json", 'rt') as json_file:
+with open(f"{name}/out.json", 'rt', encoding='utf-8') as json_file:
   compile_data = json.load(json_file)
 assert compile_data is not None
 compile_params = compile_data['params']
@@ -68,8 +66,7 @@ output_port_map = f"{{sqrt_result[idx=0:{size - 1}] -> [PE[1,0] -> index[idx]]}}
 output_color = 0 # The output color to which the kernel will send data.
 runner.add_output_tensor(output_color, output_port_map, np.float16)
 
-runner.connect_and_run(sim_out_path)
-loader = ELFLoader(elf_paths[0], sim_out_path)
+runner.connect_and_run()
 
 # Square-root example
 sqrt_result = runner.out_tensor_dict["sqrt_result"]
@@ -79,12 +76,12 @@ np.testing.assert_equal(sqrt_result, expected)
 # Transformation example
 expected = transformation(np.diag(A), 2.0, 6.0, weights)
 np.fill_diagonal(A, expected)
-actual = loader.get_as_array("A", 25, np.float16)[1, 1, :]
+actual = runner.get_symbol(1, 1, "A", np.float16)
 np.testing.assert_equal(actual.reshape((5, 5)), A)
 
 # Reduction example
 sum_result = np.array([reduction(B)], dtype=np.int16)
-expected = loader.get_as_array("sum", 1, np.int16)[1, 1, 0]
+expected = runner.get_symbol(1, 1, "sum", np.int16)
 np.testing.assert_equal(sum_result, expected)
 
 print("SUCCESS!")

@@ -71,6 +71,6 @@ comptime {
   @activate(mainColor);
   @bind_task(mainTask, mainColor);
 
-  @set_local_color_config(exchColor, .{ .rx = .{ RAMP }, .tx = .{ EAST } });
-  @set_local_color_config(resultColor, .{ .rx = .{ RAMP }, .tx = .{ NORTH } });
+  @set_local_color_config(exchColor, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST } } });
+  @set_local_color_config(resultColor, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ NORTH } } });
 }

@@ -23,7 +23,7 @@ const in_dsd = @get_dsd(fabin_dsd, .{.extent = num_elements_to_process,
                                      .fabric_color = in_color,
                                      .input_queue = in_queue});
 comptime {
-  @set_local_color_config(in_color, .{.rx = .{WEST}, .tx = .{RAMP}});
+  @set_local_color_config(in_color, .{.routes = .{.rx = .{WEST}, .tx = .{RAMP}}});
   @block(in_color);
 }
 
@@ -33,7 +33,7 @@ const out_dsd = @get_dsd(fabout_dsd, .{.extent = num_elements_to_process,
                                        .fabric_color = out_color,
                                        .output_queue = out_queue});
 comptime {
-  @set_local_color_config(out_color, .{.rx = .{RAMP}, .tx = .{RAMP}});
+  @set_local_color_config(out_color, .{.routes = .{.rx = .{RAMP}, .tx = .{RAMP}}});
   @bind_task(process_task, out_color);
 }
 
@@ -59,7 +59,7 @@ comptime {
 const result_color: color = @get_color(3);
 const result_dsd = @get_dsd(fabout_dsd, .{.extent = 1, .fabric_color = result_color});
 comptime {
-  @set_local_color_config(result_color, .{.rx = .{RAMP}, .tx = .{EAST}});
+  @set_local_color_config(result_color, .{.routes = .{.rx = .{RAMP}, .tx = .{EAST}}});
 }
 
 task process_task(element:f16) void {

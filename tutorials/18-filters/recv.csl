@@ -31,27 +31,28 @@ task recvTask(data: f16) void {
 comptime {
   @bind_task(recvTask, recvColor);
 
-  const baseConfig = .{
-    .rx = .{ WEST },
-    .filter = .{
+  const baseRoute = .{
+    .rx = .{ WEST }
+  };
+
+  const filter = .{
       // Each PE should only accept three wavelets starting with the one whose
       // index field contains the value peId * 3.
       .kind = .{ .range = true },
       .min_idx = peId * 3,
       .max_idx = peId * 3 + 2,
-    },
-  };
+    };
 
   if (peId == 3) {
     // This is the last PE, don't forward the wavelet further to the east.
-    const txRoute = .{ .tx = .{ RAMP } };
-    @set_local_color_config(recvColor, @concat_structs(baseConfig, txRoute));
+    const txRoute = @concat_structs(baseRoute, .{ .tx = .{ RAMP } });
+    @set_local_color_config(recvColor, .{.routes = txRoute, .filter = filter});
   } else {
     // Otherwise, forward incoming wavelets to both CE and to the east neighbor.
-    const txRoute = .{ .tx = .{ RAMP, EAST } };
-    @set_local_color_config(recvColor, @concat_structs(baseConfig, txRoute));
+    const txRoute = @concat_structs(baseRoute, .{ .tx = .{ RAMP, EAST } });
+    @set_local_color_config(recvColor, .{.routes = txRoute, .filter = filter});
   }
 
   // Send result wavelets to the north neighbor (i.e. the halo PEs).
-  @set_local_color_config(resultColor, .{ .rx = .{ RAMP }, .tx = .{ NORTH } });
+  @set_local_color_config(resultColor, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ NORTH } } });
 }

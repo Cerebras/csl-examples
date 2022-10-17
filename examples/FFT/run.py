@@ -49,7 +49,7 @@ args = arguments()
 
 # Parse the compile metadata
 compile_data = None
-with open(f"{args.name}/out.json") as json_file:
+with open(f"{args.name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
 assert compile_data is not None
 compile_colors = compile_data["colors"]
@@ -129,13 +129,12 @@ print(f"X = {X}")
 
 #########################################
 elf_paths = glob(f"{args.name}/bin/out_[0-9]*.elf")
-sim_out_path = f"{args.name}/bin/core.out"
 
-# Write the ELF file and simulation output to a temporary directory
+# Write the ELF file to a temporary directory
 with tempfile.TemporaryDirectory() as dirpath:
   # ISL map to indicate the PE that will produce the output wavelet, along with
   # the direction of the output wavelet
-  output_port_map = f"{{out_tensor[idx=0:0] -> [PE[-1,0] -> index[idx]]}}"
+  output_port_map = "{out_tensor[idx=0:0] -> [PE[-1,0] -> index[idx]]}"
 
   runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
   runner.add_output_tensor(output_color, output_port_map, np.int16)
@@ -146,7 +145,7 @@ with tempfile.TemporaryDirectory() as dirpath:
   runner.set_symbol_rect("f", f_fill, offset=fabric_offsets)
 
   # Run the computation on a simulated wafer or "simfabric"
-  runner.connect_and_run(sim_out_path)
+  runner.connect_and_run()
 
   rect = (fabric_offsets, (width, height))
   X_res = runner.get_symbol_rect(rect, "X", precision_type)

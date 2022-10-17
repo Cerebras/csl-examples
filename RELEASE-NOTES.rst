@@ -3,6 +3,17 @@ Release Notes
 
 The following are the release notes for the CSL Examples repository, `csl-examples`.
 
+Version 0.5.1
+-----------------
+
+The examples are improved and updated to comply with the SDK version 0.5.1.
+Several new examples added:
+
+* histogram-inject
+* mandelbrot
+* residual-memcpy
+* stencil-memcpy
+
 Version 0.4.0
 -----------------
 

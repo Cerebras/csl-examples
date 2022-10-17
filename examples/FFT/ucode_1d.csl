@@ -45,5 +45,5 @@ task main_task() void {
 comptime {
   @activate(main_color);
   @bind_task(main_task, main_color);
-  @set_local_color_config(output_color, .{ .rx = .{ RAMP }, .tx = .{ WEST } });
+  @set_local_color_config(output_color, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } } });
 }

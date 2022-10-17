@@ -78,34 +78,34 @@ layout{
     // routing of FABRIC_X
     // - cliff distribution of x along columns
     // - broadcast from the north to the south
-    @set_color_config(0, 0, FABRIC_X, .{ .rx = .{NORTH}, .tx = .{RAMP, SOUTH} } );
-    @set_color_config(0, 1, FABRIC_X, .{ .rx = .{NORTH}, .tx = .{RAMP} } );
+    @set_color_config(0, 0, FABRIC_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP, SOUTH} } });
+    @set_color_config(0, 1, FABRIC_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } });
 
-    @set_color_config(1, 0, FABRIC_X, .{ .rx = .{NORTH}, .tx = .{RAMP, SOUTH} } );
-    @set_color_config(1, 1, FABRIC_X, .{ .rx = .{NORTH}, .tx = .{RAMP} } );
+    @set_color_config(1, 0, FABRIC_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP, SOUTH} } });
+    @set_color_config(1, 1, FABRIC_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } });
 
     // routing of FABRIC_B
     // - cliff distribution along rows
     // - only column 0 (P0.y) receives the data from the west
-    @set_color_config(0, 0, FABRIC_B, .{ .rx = .{WEST}, .tx = .{RAMP} } );
-    @set_color_config(0, 1, FABRIC_B, .{ .rx = .{WEST}, .tx = .{RAMP} } );
+    @set_color_config(0, 0, FABRIC_B, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+    @set_color_config(0, 1, FABRIC_B, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
 
     // routing of PSUM (for row reduction)
     // P0.0, P0.1: send partial sum
     // P1.0, P1.1: receive partial sum
-    @set_color_config(0, 0, PSUM, .{ .rx = .{RAMP}, .tx = .{EAST} } );
-    @set_color_config(0, 1, PSUM, .{ .rx = .{RAMP}, .tx = .{EAST} } );
-    @set_color_config(1, 0, PSUM, .{ .rx = .{WEST}, .tx = .{RAMP} } );
-    @set_color_config(1, 1, PSUM, .{ .rx = .{WEST}, .tx = .{RAMP} } );
+    @set_color_config(0, 0, PSUM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+    @set_color_config(0, 1, PSUM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+    @set_color_config(1, 0, PSUM, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+    @set_color_config(1, 1, PSUM, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
 
     // routing of TXACT
     // P1.0 sends out |b-A*x|
-    @set_color_config(1, 0, TXACT, .{ .rx = .{RAMP}, .tx = .{EAST} } );
+    @set_color_config(1, 0, TXACT, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
 
     // routing of NRM (for column reduction)
     // P1.0: receive local nrm from P1.1
     // P1.1: send local nrm to P1.0
-    @set_color_config(1, 0, NRM, .{ .rx = .{SOUTH}, .tx = .{RAMP} } );
-    @set_color_config(1, 1, NRM, .{ .rx = .{RAMP}, .tx = .{NORTH} } );
+    @set_color_config(1, 0, NRM, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } });
+    @set_color_config(1, 1, NRM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } });
 
 } // end of layout

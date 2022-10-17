@@ -1,0 +1,129 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// inner-product version of GEMV
+//
+// http://www.netlib.org/lapack/explore-html/db/d58/sgemv_8f.html
+// SGEMV - perform the matrix-vector operation
+//     y := alpha*A*x + beta*y
+//
+// @param[in] m      number of rows of the matrix A
+// @param[in] n      number of columns of the matrix A
+// @param[in] alpha  scalar
+// @param[in] A      array of dimension (lda, n)
+// @param[in] lda    leading dimension of the matrix A which is column-major
+// @param[in] x      array of dimension n
+// @param[in] beta   scalar
+// @param[in,out] y  array of dimension m
+//                   entry: if beta is zero, y can be NAN or INF
+
+
+param sizeA : i16 ;  // size of A, sizeA >= lda*n
+param sizeX : i16 ;  // size of x, sizeX >= n
+param sizeY : i16 ;  // size of y, sizeY >= m
+
+
+fn sgemv_inner( m: i16, n: i16, alpha: f32,  A: *[sizeA]f32,  lda: i16, x: *[sizeX]f32, beta: f32, y: *[sizeY]f32 ) void {
+
+    var row : i16 = 0;
+    while(row < m) : (row +=1) {
+        var dot : f32 = @as(f32, 0);
+        var col : i16 = 0;
+        while(col < n) : (col += 1) {
+            var Aij : f32 = (A.*)[row + col*lda];
+            var xj  : f32 = (x.*)[col];
+            dot = dot + Aij*xj;
+        }
+
+        // dot = A(row,:)*x
+        // WARNING: if beta is zero, y can be NAN or INF
+        var yi : f32 = @as(f32, 0);
+        if (beta != @as(f32, 0)){
+            yi = (y.*)[row];
+        }
+        yi = alpha*dot + beta*yi;
+        (y.*)[row] = yi;
+    }
+}
+
+
+
+// outer-product version of GEMV
+//
+// Ax = 0
+// for col= 0:n-1
+//    Ax = Ax + A(:, col) * x(col)
+// end
+// if beta is not zero
+//    y = beta * y
+// end
+// y = y + alpha * Ax
+//
+// http://www.netlib.org/lapack/explore-html/db/d58/sgemv_8f.html
+// SGEMV - perform the matrix-vector operation
+//     y := alpha*A*x + beta*y
+//
+// @param[in] m      number of rows of the matrix A
+// @param[in] n      number of columns of the matrix A
+// @param[in] alpha  scalar
+// @param[in] A      array of dimension (lda, n)
+// @param[in] lda    leading dimension of the matrix A which is column-major
+// @param[in] x      array of dimension n
+// @param[in] beta   scalar
+// @param[in,out] y  array of dimension m
+//                   entry: if beta is zero, y can be NAN or INF
+// @param[in,out] ws workspace, array of dimension m
+
+
+// To change the base address and the length of a DSD, csl requires a dummy DSD.
+// The type here doesn't matter
+const dummy = @zeros([1]i16);
+// The length doesn't matter either since csl will overwrite it
+const dummy_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{42} -> dummy[i]});
+
+fn sgemv_outer( m: i16, n: i16, alpha: f32,  A: *[sizeA]f32,  lda: i16, x: *[sizeX]f32, beta: f32, y: *[sizeY]f32 , ws:*[sizeY]f32 ) void {
+
+    // bind vector Ax to a DSD
+    var mem_Ax_buf_dsd = @set_dsd_base_addr(dummy_dsd, ws);
+    mem_Ax_buf_dsd = @set_dsd_length(mem_Ax_buf_dsd, @bitcast(u16, m) );
+
+    // bind vector y to a DSD
+    // it is based on mem_Ax_buf_dsd, so no need to set the length again
+    var mem_y_buf_dsd = @set_dsd_base_addr(mem_Ax_buf_dsd, y);
+
+    // Ax = 0
+    var zero : f32 = @as(f32, 0);
+    @fmovs(mem_Ax_buf_dsd, zero);
+
+    // Ax = accumulate(A(:, col) * x(col))
+    var col : i16 = 0;
+    while(col < n) : (col += 1) {
+        var xj : f32 = (x.*)[col];
+        // bind vector w = A(:,col) to a DSD
+        // it is based on mem_Ax_buf_dsd, so no need to set the length again
+        var mem_w_buf_dsd = @set_dsd_base_addr(mem_Ax_buf_dsd, A);
+        mem_w_buf_dsd = @increment_dsd_offset(mem_w_buf_dsd, col * lda, f32);
+        @fmacs(mem_Ax_buf_dsd, mem_Ax_buf_dsd, mem_w_buf_dsd, xj);
+    }
+
+    // y = beta * y
+    // if beta is zero, y can be NAN or INF
+    if (beta != zero ){
+        @fmuls(mem_y_buf_dsd, mem_y_buf_dsd, beta);
+    }
+
+    // y = y + alpha * Ax
+    @fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_Ax_buf_dsd, alpha);
+}

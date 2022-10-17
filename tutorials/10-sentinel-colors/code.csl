@@ -41,10 +41,10 @@ layout {
   var idx :i16 = 0;
   while (idx < 10) {
     @set_tile_code(0, idx, "code.csl");
-    @set_color_config(0, idx, main_color, main_route);
+    @set_color_config(0, idx, main_color, .{ .routes = main_route });
 
     const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-    @set_color_config(0, idx, output_color, output_route);
+    @set_color_config(0, idx, output_color, .{ .routes = output_route });
 
     idx += 1;
   }

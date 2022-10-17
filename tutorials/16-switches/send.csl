@@ -75,10 +75,13 @@ comptime {
   @bind_task(mainTask, mainColor);
   @activate(mainColor);
 
-  const route = .{
+  const routes = .{
     // The default route, which is to receive from ramp and send to north
     .rx = .{ RAMP },
-    .tx = .{ NORTH },
+    .tx = .{ NORTH }
+  };
+
+  const switches = .{
 
     // Upon a control wavelet, change the transmit direction to west
     .pos1 = .{ .tx = WEST },
@@ -96,5 +99,5 @@ comptime {
     .ring_mode = true,
   };
 
-  @set_local_color_config(txColor, route);
+  @set_local_color_config(txColor, .{.routes = routes, .switches = switches});
 }

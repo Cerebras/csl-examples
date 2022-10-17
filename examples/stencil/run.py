@@ -43,7 +43,6 @@ tsc_color = args.tsc_color
 iter_color = args.iter_color
 
 elf_paths = glob(f"{name}/bin/out_[0-9]*.elf")
-sim_out_path = f"{name}/bin/core.out"
 
 runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 
@@ -58,7 +57,7 @@ tsc_port_map = f"{{tsc_tensor[idx=0:5] -> [PE[{size-1},-1] -> index[idx]]}}"
 runner.add_output_tensor(tsc_color, tsc_port_map, np.uint16)
 
 # Start simulation and wait for the tally message
-runner.connect_and_run(sim_out_path)
+runner.connect_and_run()
 
 rect = ((1, 1), (size, size))
 minValues = runner.get_symbol_rect(rect, "minValue", np.float32)

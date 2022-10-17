@@ -69,9 +69,9 @@ layout {
 
     // Each PE accepts wavelets from the north and forwards them to the ramp
     const route = .{ .rx = .{ NORTH }, .tx = .{ RAMP } };
-    @set_color_config(pe_x, 0, mainColor, route);
+    @set_color_config(pe_x, 0, mainColor, .{ .routes = route });
 
     const outputRoute = .{ .rx = .{ RAMP }, .tx = .{ SOUTH } };
-    @set_color_config(pe_x, 0, outputColor, outputRoute);
+    @set_color_config(pe_x, 0, outputColor, .{ .routes = outputRoute });
   }
 }

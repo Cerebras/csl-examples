@@ -43,10 +43,10 @@ comptime {
   @comptime_assert(inDir != RAMP and outDir != RAMP);
 
   const inRoute = .{ .rx = .{ inDir }, .tx = .{ RAMP } };
-  @set_local_color_config(inColor, inRoute);
+  @set_local_color_config(inColor, .{ .routes = inRoute });
 
   const outRoute = .{ .rx = .{ RAMP }, .tx = .{ outDir } };
-  @set_local_color_config(outColor, outRoute);
+  @set_local_color_config(outColor, .{ .routes = outRoute });
 
   @bind_task(thisTask, inColor);
 }

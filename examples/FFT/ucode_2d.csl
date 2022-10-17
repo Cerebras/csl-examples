@@ -208,31 +208,48 @@ comptime {
   @bind_task(sync, sync_color);
 
   if (PE_X == 0) {
-     @set_local_color_config(LR_color, .{ .rx = .{ RAMP }, .tx = .{ EAST }, .pop_mode = .{.always_pop = true},
-                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
-     @set_local_color_config(RL_color, .{ .rx = .{ EAST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true},
-                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+     @set_local_color_config(LR_color, .{
+                             .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST }, .pop_mode = .{.always_pop = true} },
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                            });
+     @set_local_color_config(RL_color, .{
+                             .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true} },
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                            });
 
   } else if (PE_X == WIDTHm1) { //LAST PE
-    @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true},
-                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
-    @set_local_color_config(RL_color, .{ .rx = .{ RAMP }, .tx = .{ WEST }, .pop_mode = .{.always_pop = true},
-                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+    @set_local_color_config(LR_color, .{
+                            .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true} },
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
+                          });
+    @set_local_color_config(RL_color, .{
+                            .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST }, .pop_mode = .{.always_pop = true} },
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                          });
 
   } else { // PEs in the MIDDLE
     if (PE_X == 1) {
-      @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
-                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true} });
+      @set_local_color_config(LR_color, .{
+                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pop_mode = .{.always_pop = true} },
+                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP } },
+                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                            });
     } else {
-      @set_local_color_config(LR_color, .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
-                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-PE_X)*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
+      @set_local_color_config(LR_color, .{
+                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pop_mode = .{.always_pop = true} },
+                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP } },
+                              .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-PE_X)*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
+                            });
     }
 
-    @set_local_color_config(RL_color, .{ .rx = .{ EAST }, .tx = .{ RAMP, WEST }, .pos1 = .{ .tx = WEST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true},
-                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-(PE_X+1))*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true} });
+    @set_local_color_config(RL_color, .{
+                            .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP, WEST }, .pop_mode = .{.always_pop = true} },
+                            .switches = .{ .pos1 = .{ .tx = WEST }, .pos2 = .{ .rx = RAMP } },
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-(PE_X+1))*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
+                          });
   }
 
   if (PE_X == 0) {
-    @set_local_color_config(output_color, .{ .rx = .{ RAMP }, .tx = .{ WEST } });
+    @set_local_color_config(output_color, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } } });
   }
 }

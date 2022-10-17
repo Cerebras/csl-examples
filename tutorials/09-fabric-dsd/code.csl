@@ -43,8 +43,8 @@ layout {
   @set_tile_code(0, 0, "code.csl", .{ .size = size });
 
   const inRoute = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
-  @set_color_config(0, 0, inColor, inRoute);
+  @set_color_config(0, 0, inColor, .{ .routes = inRoute });
 
   const outRoute = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-  @set_color_config(0, 0, outColor, outRoute);
+  @set_color_config(0, 0, outColor, .{ .routes = outRoute });
 }

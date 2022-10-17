@@ -199,11 +199,11 @@ layout {
 
       if (xId < size - 1) {
         @set_color_config(xId, yId, iterColor, .{
-          .rx = .{ WEST }, .tx = .{ RAMP, EAST }
-        });
+            .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST } }
+          });
       } else {
         @set_color_config(xId, yId, iterColor, .{
-          .rx = .{ WEST }, .tx = .{ RAMP }
+          .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } }
         });
       }
     }
@@ -211,6 +211,6 @@ layout {
 
   // The top-right PE sends the value of the timestamp counter back to the host.
   @set_color_config(size - 1, 0, tscColor, .{
-    .rx = .{ RAMP }, .tx = .{ NORTH }
+    .routes = .{ .rx = .{ RAMP }, .tx = .{ NORTH } }
   });
 }
