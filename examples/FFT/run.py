@@ -48,10 +48,8 @@ def arguments():
 args = arguments()
 
 # Parse the compile metadata
-compile_data = None
 with open(f"{args.name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
-assert compile_data is not None
 compile_colors = compile_data["colors"]
 compile_params = compile_data["params"]
 output_color = int(compile_colors["output_color"])
@@ -77,8 +75,8 @@ Ny = height
 precision_type = np.float16 if FP == 1 else np.float32
 
 Nh = Nz >> 1
-Tx = int(Nx / width)
-Ty = int(Ny / height)
+Tx = Nx // width
+Ty = Ny // height
 Tz = Tx
 
 print(f"Nx:{Nx}, Ny:{Ny}, Nz:{Nz}, width:{width}, height:{height}, 2D:{is_2D}")
@@ -87,7 +85,7 @@ print(f"Tx:{Tx}, Ty:{Ty}, Tz:{Tz}")
 ELEM_SIZE = 2
 BRICK_ELEM = Tx * Ty * Tz
 BRICK_LEN = BRICK_ELEM * ELEM_SIZE
-depth = int(Nz/Tz)
+depth = Nz // Tz
 LOCAL_TENSOR_ELEM = BRICK_ELEM * depth
 LOCAL_TENSOR_LEN = LOCAL_TENSOR_ELEM * ELEM_SIZE
 
@@ -119,10 +117,9 @@ X = np.zeros((width, height, LOCAL_TENSOR_LEN), dtype=precision_type)
 for x in range(Nx):
   for y in range(Ny):
     for z in range(Nz):
-      offset = int((x%Tx))
-      offset = offset + z*Tz
-      X[int(x/Tx)][y][offset*2] = X_pre[x][y][z]
-      X[int(x/Tx)][y][offset*2+1] = 0
+      offset = x % Tx + z * Tz
+      X[x // Tx][y][offset*2] = X_pre[x][y][z]
+      X[x // Tx][y][offset*2+1] = 0
 
 print(f"X.shape: {X.shape}, X.dtype = {X.dtype}")
 print(f"X = {X}")
@@ -165,9 +162,8 @@ for row in range(height):
 for y in range(Ny):
   for x in range(Nx):
     for z in range(Nz):
-      offset = int((x%Tx))
-      offset = offset + z*Tz
-      result_array[y][x][z] = result_array_pre[y][int(x/Tx)][offset]
+      offset = x % Tx + z * Tz
+      result_array[y][x][z] = result_array_pre[y][x // Tx][offset]
 
 # Transpose the array if needed and get the FFT result with the NumPy Reference
 random_array_sq = random_array.reshape((Ny, Nx, Nz))

@@ -57,10 +57,8 @@ right = (int(num[2]) << 64) | int(num[3])
 tensors = np.concatenate([intToWords(left), intToWords(right)])
 
 # Parse the compile metadata
-compile_data = None
 with open(f"{name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
-assert compile_data is not None
 compile_colors = compile_data["colors"]
 receiveColor = int(compile_colors["recvColor"])
 triggerColor = int(compile_colors["triggerColor"])

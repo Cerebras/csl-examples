@@ -1,4 +1,4 @@
-.. _residual:
+.. _benchmark-residual:
 
 Residual
 ========
@@ -6,8 +6,8 @@ Residual
 This example shows a CSL program that uses a rectangle of 2-by-2 PEs to compute
 ``|b - A * x|``, i.e., the norm of the residual ``b - A * x``.
 
-``A`` is an ``M x N`` matrix. Each PE computes a part of the ``A'*x``
-multiplication, where ``A''' is a ``M/2 x N/2`` matrix. In other words, each PE
+``A`` is an ``M x N`` matrix. Each PE computes a part of the ``A*x``
+multiplication, where ``A`` is a ``M/2 x N/2`` matrix. In other words, each PE
 essentially does "a fourth" of the multiplication. It then does a row reduction,
 so that the last column of PEs has the result ``b - A*x``. Finally, the PEs of
 the last column computes the norm, ``|b-A*x|``, via a column reduction.
@@ -16,7 +16,7 @@ The 2-by-2 rectangle is surrounded by a halo of size 1 as shown below.
 The halo is used to route the input and output data between the host and the
 device.
 
-.. _residual-2-by-2:
+.. _fig-residual-2-by-2:
 
 .. figure:: ./images/residual-2-by-2.png
     :align: center

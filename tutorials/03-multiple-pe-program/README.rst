@@ -10,3 +10,6 @@ instructions in the file ``pe_program.csl`` for generating code for each PE.
 This program also illustrates a way to enable each PE to distinguish itself from
 others by receiving an integer (``pe_id``) from the layout block.  Parameters
 are explained in more detail in the next example.
+
+In this program, each of the four PEs receive an integer ``pe_id``,
+increment it by 42, and then send its result to the NORTH on an output wavelet.

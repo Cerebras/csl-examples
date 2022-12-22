@@ -8,8 +8,9 @@ such instructions over memory addresses.
 
 This example creates three one-dimensional memory DSDs, each of which tells the
 hardware how to loop over a different array.  The ``tensor_access`` field
-specifies an induction variable, a loop bound, and an affine expression to
-generate various addresses at runtime.
+specifies an induction variable, a loop bound, and an affine expression
+(i.e., a linear function plus a constant) to generate various addresses at
+runtime.
 
 The code then uses these three DSDs in a DSD operation (``@faddh``) to store the
 results of a point-wise addition of two arrays into a third array.  Other DSD

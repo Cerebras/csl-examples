@@ -30,10 +30,8 @@ args = parser.parse_args()
 name = args.name
 
 # Parse the compile metadata
-compile_data = None
 with open(f"{name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
-assert compile_data is not None
 compile_colors = compile_data["colors"]
 compile_params = compile_data["params"]
 HIST_W = int(compile_params["HIST_WIDTH"])

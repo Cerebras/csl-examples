@@ -1,0 +1,130 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param c2d_params: comptime_struct;
+const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+const mpi_common = @import_module("<collectives_2d/common>", .{ .c2d_params = c2d_params });
+
+// Size of our local tile of `A`
+param Nt: u16; // Height of local matrix, or num rows per PE
+param Mt: u16; // Width of local matrix, or num cols per PE
+
+// Size of rectangle of PEs on which our kernel runs
+const Pw = @get_rectangle().width;  // Num cols of PEs in kernel
+const Ph = @get_rectangle().height; // Num rows of PEs in kernel
+
+// Only PE[0,0] will be initialized by run.py with a full copy of `x`
+var x_src = @zeros([Mt * Pw]f32);
+
+// Only PE[0,0] will be initialized by run.py with a full copy of `b`
+var b_src = @zeros([Nt * Ph]f32);
+
+// Each PE has its own tile of `A` initialized by run.py
+var A_tile = @zeros([Nt,Mt]f32);
+const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> A_tile[i, 0] });
+
+// The tile of `x` which will be scattered across PEs received in `scatter_x()`
+// or received in `broadcast_x_down()`
+var x_tile = @zeros([Mt]f32);
+const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> x_tile[i]});
+
+// The tile of `b` which will be scattered across PEs received in `scatter_b()`
+var b_tile = @zeros([Nt]f32);
+const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> b_tile[i]});
+
+// The product of `A_tile` with `x_tile` (computed by the `compute()` task)
+var local_prod = @zeros([Nt]f32);
+const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> local_prod[i]});
+
+// The sum of products across a row of PEs
+var row_sum = @zeros([Nt]f32);
+
+// The final result is stored on PE[Pw-1, Ph-1]
+var final_result = @zeros([Nt * Ph]f32);
+
+// Updated at runtime to store x and y IDs of PE reported by collectives library
+var px: u16;
+var py: u16;
+
+const scatter_b_color = @get_color(9);
+const scatter_x_color = @get_color(10);
+const broadcast_x_down_color = @get_color(11);
+const compute_color = @get_color(12);
+const gather_result_color = @get_color(13);
+const done_color = @get_color(14);
+
+// Scatter `b` into tiles across the left column of PEs
+task scatter_b() void {
+  mpi_x.init(&mpi_common.pendings);
+  mpi_y.init(&mpi_common.pendings);
+  px = mpi_x.pe_id;
+  py = mpi_y.pe_id;
+
+  if (px == 0) {
+    mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
+                  Nt, scatter_x_color);
+  } else {
+    @activate(scatter_x_color);
+  }
+}
+
+// Scatter `x` into tiles across the top row of PEs
+task scatter_x() void {
+  if (py == 0) {
+    mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
+                  Mt, broadcast_x_down_color);
+  } else {
+    @activate(broadcast_x_down_color);
+  }
+}
+
+// Broadcast tiles of `x` down the columns of PEs
+task broadcast_x_down() void {
+  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), Mt, compute_color);
+}
+
+// Compute the product of the local `x_tile` with the local `A_tile`,
+// then reduce it across rows of PEs
+task compute() void {
+
+  for (@range(i16, Mt)) |j| {
+    // offset dsd_A_tile to the corresponding column of A_tile
+    const dsd_A_offset = @increment_dsd_offset(dsd_A_tile, j, f32);
+    @fmacs(dsd_local_prod, dsd_local_prod, dsd_A_offset, x_tile[j]);
+  }
+
+  if (px == 0) {
+    @fadds(dsd_local_prod, dsd_local_prod, dsd_b_tile);
+  }
+
+  mpi_x.reduce_fadds(Pw - 1, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
+                     Nt, gather_result_color);
+}
+
+// Gather the product into the bottom right PE
+task gather_result() void {
+  mpi_y.gather(Ph - 1, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &final_result),
+               Nt, done_color);
+}
+
+comptime {
+  @bind_task(scatter_b, scatter_b_color);
+  @bind_task(scatter_x, scatter_x_color);
+  @bind_task(broadcast_x_down, broadcast_x_down_color);
+  @bind_task(compute, compute_color);
+  @bind_task(gather_result, gather_result_color);
+
+  @activate(scatter_b_color);
+}

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+const directions = @import_module("<directions>");
+
 param FIRST_COLOR:u16;
 param LAST_PE:i16;
 param FROM:direction;
@@ -21,26 +23,11 @@ const c2: color = @get_color(FIRST_COLOR + 1);
 const c3: color = @get_color(FIRST_COLOR + 2);
 const c4: color = @get_color(FIRST_COLOR + 3);
 
-fn flip(d:direction) direction {
-  @comptime_assert(d != RAMP);
-  if (d == NORTH) {
-    return SOUTH;
-  }
-  if (d == SOUTH) {
-    return NORTH;
-  }
-  if (d == WEST) {
-    return EAST;
-  }
-  // d == EAST
-  return WEST;
-}
-
 fn next_available_color() u16 {
   return FIRST_COLOR + 4;
 }
 
-const TO:direction = flip(FROM);
+const TO:direction = directions.flip(FROM);
 
 // Torus routing: Each row and column is wired in a ring. Even numbered PEs pass
 // data in one direction, and odd numbered PEs pass it in the opposite

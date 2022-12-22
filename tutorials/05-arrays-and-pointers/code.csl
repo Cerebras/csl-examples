@@ -41,6 +41,7 @@ comptime {
 
 layout {
   @set_rectangle(1, 1);
+  // Since no file is given to set_tile_code, current file is assumed
   @set_tile_code(0, 0);
 
   const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };

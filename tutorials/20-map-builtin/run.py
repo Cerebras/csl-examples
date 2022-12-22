@@ -50,10 +50,8 @@ def reduction(array):
 np.random.seed(seed=7)
 
 # Parse the compile metadata
-compile_data = None
 with open(f"{name}/out.json", 'rt', encoding='utf-8') as json_file:
   compile_data = json.load(json_file)
-assert compile_data is not None
 compile_params = compile_data['params']
 size = int(compile_params['size'])
 

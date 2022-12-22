@@ -5,7 +5,7 @@ Loops
 The generic version of CSL's ``while`` loops, shown in previous examples, is
 similar to the one in many other languages.  In CSL, ``while`` loops can also
 have a ``continue`` expression, which contains statements that must execute at
-the end of the each iteration.  Such ``continue`` expressions are useful to
+the end of each iteration.  Such ``continue`` expressions are useful to
 ensure that we don't accidentally forget to, say, increment loop counters.
 
 The ``for`` loop syntax in CSL is somewhat different from that in many other

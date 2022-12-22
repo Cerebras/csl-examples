@@ -54,6 +54,8 @@
 
 import os
 import argparse
+import shlex
+import subprocess
 import sys
 from glob import glob
 from typing import List, Optional
@@ -71,13 +73,13 @@ def parse_args():
   """ parse the command line """
 
   parser = argparse.ArgumentParser(description="residual parameters.")
-  parser.add_argument("-m", type=int,  \
-        help="number of rows of the matrix A")
-  parser.add_argument("-n", type=int,  \
-        help="number of columns of the matrix A. If A is square, \
-              n is the dimension of the matrix and m is not used")
-  parser.add_argument("--debug", \
-        help="show A, x, and b", action="store_true")
+  parser.add_argument("-m", type=int,
+                      help="number of rows of the matrix A")
+  parser.add_argument("-n", type=int,
+                      help="number of columns of the matrix A. If A is square, \
+                            n is the dimension of the matrix and m is not used")
+  parser.add_argument("--debug",
+                      help="show A, x, and b", action="store_true")
   parser.add_argument(
       "--cslc",
       required=False,
@@ -107,12 +109,22 @@ def csl_compile(name: str, compile_flag: bool, cslc: str, LOCAL_OUT_SZ: int, LOC
   # halo has size 1
   fabric_width = width + 2
   fabric_height = height + 2
-  csl_cmd = f"{cslc} {file_config} --fabric-dims={fabric_width},{fabric_height} \
-  --fabric-offsets=1,1 --params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ} -o {name}"
-  print(f"[csl_compile] command line for CSL: {csl_cmd}")
+  csl_cmd = [
+      cslc,
+      file_config,
+      f"--fabric-dims={fabric_width},{fabric_height}",
+      "--fabric-offsets=1,1",
+      f"--params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ}",
+      "-o",
+      name
+  ]
+  print(
+      f"[csl_compile] command line for CSL: {shlex.quote(a) for a in csl_cmd}"
+  )
   if compile_flag:
-    result = os.system(csl_cmd)
-    if result > 0:
+    try:
+      subprocess.check_call(csl_cmd)
+    except subprocess.CalledProcessError:
       print("ERROR: CSL fails\n")
       sys.exit(1)
   else:
@@ -193,8 +205,8 @@ def main():
   code_csl = "layout.csl"
 
   # compile csl files and generate compilation ELFs
-  elf_list = csl_compile(args.name, args.compile, args.cslc, LOCAL_OUT_SZ, LOCAL_IN_SZ, \
-    width, height, code_csl)
+  elf_list = csl_compile(args.name, args.compile, args.cslc, LOCAL_OUT_SZ, LOCAL_IN_SZ,
+                         width, height, code_csl)
 
   # run simulation
   nrm_r_cs = run(elf_list, width, height, A, M, N, x, b,

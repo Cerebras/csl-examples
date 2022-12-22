@@ -37,15 +37,12 @@
    Such functions are imported as modules via gemv.csl, axpy.csl and nrminf.csl.
    The arrays A, x and y are passed into the function as pointers.
 
-   The vector x is distributed into columns from the north of the rectangle.
-   The first row receives x from the fabric, then broadcasts x into other rows.
-   One can distribute x to the diagonal PEs from the west of the rectangle,
-   then broadcasts x to columns.
-   This requires two colors, one to receive x and the other to send out x.
+   The vector x is distributed into columns. The first row receives x from the fabric,
+   then broadcasts x into other rows.
 
-   The vector b is distributed into rows of the first column from the west of the rectangle.
+   The vector b is distributed into rows of the first column.
 
-   P1.0 computes |b-A*x| and sends it out.
+   P1.0 computes |b-A*x| which is sent out..
 
    One can use the following command to check the landing log of P0.0,
     sdk_debug_shell wavelet-trace --artifact_dir . --x 1 --y 1 trace
@@ -55,12 +52,14 @@
 
 import os
 import argparse
-from glob import glob
-from typing import List
+from pathlib import Path
+from typing import Optional
+import shutil
 import subprocess
 import numpy as np
 
-from cerebras.elf.cs_elf_runner import CSELFRunner
+from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime # pylint: disable=no-name-in-module
 
 FILE_PATH = os.path.realpath(__file__)
 RESIDUAL_DIR = os.path.dirname(FILE_PATH)
@@ -68,15 +67,29 @@ BENCHMARKS_DIR = os.path.dirname(RESIDUAL_DIR)
 CSL_DIR = os.path.dirname(BENCHMARKS_DIR)
 CSLC = os.path.join(CSL_DIR, "build") + "/bin/cslc"
 
+
+def cast_uint32(x):
+  if isinstance(x, (np.float16, np.int16, np.uint16)):
+    z = x.view(np.uint16)
+    return np.uint32(z)
+  if isinstance(x, (np.float32, np.int32, np.uint32)):
+    return x.view(np.uint32)
+  if isinstance(x, int):
+    return np.uint32(x)
+
+  raise RuntimeError(f"type of x {type(x)} is not supported")
+
+
+
 def parse_args():
   """ parse the command line """
 
   parser = argparse.ArgumentParser(description="residual parameters.")
-  parser.add_argument("-m", type=int,  \
-        help="number of rows of the matrix A")
-  parser.add_argument("-n", type=int,  \
-        help="number of columns of the matrix A. If A is square, \
-              n is the dimension of the matrix and m is not used")
+  parser.add_argument("-m", type=int,
+                      help="number of rows of the matrix A")
+  parser.add_argument("-n", type=int,
+                      help="number of columns of the matrix A. If A is square, \
+                            n is the dimension of the matrix and m is not used")
   parser.add_argument(
       "--cslc",
       required=False,
@@ -97,6 +110,24 @@ def parse_args():
       "--fabric-dims",
       help="Fabric dimension, i.e. <W>,<H>")
 
+  parser.add_argument(
+      "--width-west-buf",
+      default=0, type=int,
+      help="width of west buffer")
+  parser.add_argument(
+      "--width-east-buf",
+      default=0, type=int,
+      help="width of east buffer")
+  parser.add_argument(
+      "--n_channels",
+      default=1, type=int,
+      help="Number of memcpy \"channels\" (LVDS/streamers for both input and output)  to use \
+            when memcpy support is compiled with this program. If this argument is not present, \
+            or is 0, then the previous single-LVDS version is compiled.")
+  parser.add_argument(
+      "--arch",
+      help="wse1 or wse2. Default is wse1 when not supplied.")
+
   args = parser.parse_args()
 
   return args
@@ -110,55 +141,44 @@ def csl_compile(
     elf_dir: str,
     fabric_width: int,
     fabric_height: int,
+    core_fabric_offset_x: int,
+    core_fabric_offset_y: int,
     compile_flag: bool,
+    arch: Optional[str],
+    LAUNCH: int,
     LOCAL_OUT_SZ: int,
-    LOCAL_IN_SZ: int
-    ) -> List[str]:
+    LOCAL_IN_SZ: int,
+    n_channels: int,
+    width_west_buf: int,
+    width_east_buf: int
+    ):
   """Generate ELFs for the layout, one ELF per PE"""
 
   comp_dir = elf_dir
-
-  MEMCPYH2D_DATA_1 = 0
-  MEMCPYH2D_DATA_2 = 1
-  MEMCPYH2D_DATA_3 = 2
-
-  MEMCPYD2H_DATA_1 = 3
 
   if compile_flag:
     args = []
     args.append(cslc) # command
     args.append(file_config) # file
     args.append(f"--fabric-dims={fabric_width},{fabric_height}") # options
-    args.append("--fabric-offsets=4,1") # options
+    args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}") # options
     args.append(f"--params=width:{width},height:{height}") # options
-    if MEMCPYH2D_DATA_1 is not None:
-      args.append(f"--params=MEMCPYH2D_DATA_1_ID:{MEMCPYH2D_DATA_1}") # options
-    if MEMCPYH2D_DATA_2 is not None:
-      args.append(f"--params=MEMCPYH2D_DATA_2_ID:{MEMCPYH2D_DATA_2}") # options
-    if MEMCPYH2D_DATA_3 is not None:
-      args.append(f"--params=MEMCPYH2D_DATA_3_ID:{MEMCPYH2D_DATA_3}") # options
-    if MEMCPYD2H_DATA_1 is not None:
-      args.append(f"--params=MEMCPYD2H_DATA_1_ID:{MEMCPYD2H_DATA_1}") # options
-
     args.append(f"--params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ}") # options
 
-    args.append(f"-o={comp_dir}")
-    args.append("--memcpy")
+    args.append(f"--params=LAUNCH_ID:{LAUNCH}") # options
 
+    args.append(f"-o={comp_dir}")
+    if arch is not None:
+      args.append(f"--arch={arch}")
+    args.append("--memcpy")
+    args.append(f"--channels={n_channels}")
+    args.append(f"--width-west-buf={width_west_buf}")
+    args.append(f"--width-east-buf={width_east_buf}")
     print(f"subprocess.check_call(args = {args}")
     subprocess.check_call(args)
   else:
-    print("[csl_compile_core] use pre-compile ELFs")
+    print("[csl_compile] use pre-compile ELFs")
 
-  elfs = glob(f"{comp_dir}/bin/out_[0-9]*.elf")
-
-  west_dir = os.path.join(elf_dir, "west")
-  elfs_west = glob(f"{west_dir}/bin/out_[0-9]*.elf")
-
-  east_dir = os.path.join(elf_dir, "east")
-  elfs_east = glob(f"{east_dir}/bin/out_[0-9]*.elf")
-
-  return elfs + elfs_west + elfs_east
 
 
 def main():
@@ -210,8 +230,11 @@ def main():
   # text file containing the simulator logs
   sim_log = os.path.join(args.name, "sim.log")
 
-  print(f"code_csl = {code_csl}")
-  print(f"sim_log = {sim_log}")
+  n_channels = args.n_channels
+  width_west_buf = args.width_west_buf
+  width_east_buf = args.width_east_buf
+  print(f"n_channels = {n_channels}")
+  print(f"width_west_buf = {width_west_buf}, width_east_buf = {width_east_buf}")
 
   fabric_offset_x = 1
   fabric_offset_y = 1
@@ -223,13 +246,19 @@ def main():
     fabric_height = int(h_str)
 
   if fabric_width == 0 or fabric_height == 0:
-    fabric_width = fabric_offset_x + width + 5 + 1
+    fabric_width = fabric_offset_x + 3 + width + 2 + 1 + width_west_buf + width_east_buf
     fabric_height = fabric_offset_y + height + 1
 
+  core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
+  core_fabric_offset_y = fabric_offset_y
+
   print(f"fabric_width = {fabric_width}, fabric_height = {fabric_height}")
+  print(f"core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y = {core_fabric_offset_y}")
+
+  LAUNCH = 4
 
   # compile csl files and generate compilation ELFs
-  elf_list = csl_compile(
+  csl_compile(
       args.cslc,
       width,
       height,
@@ -237,15 +266,33 @@ def main():
       args.name,
       fabric_width,
       fabric_height,
+      core_fabric_offset_x,
+      core_fabric_offset_y,
       args.compile,
+      args.arch,
+      LAUNCH,
       LOCAL_OUT_SZ,
-      LOCAL_IN_SZ)
+      LOCAL_IN_SZ,
+      n_channels,
+      width_west_buf,
+      width_east_buf)
+  if args.compile:
+    print("COMPILE ONLY: EXIT")
+    return
 
-  c_h2d = [0, 1, 2]
-  c_d2h = [3]
+  simulator = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
-  simulator = CSELFRunner(elf_list, debug_mode=True, cmaddr=args.cmaddr, \
-        height=height, width=width, input_colors=set(c_h2d), output_colors=set(c_d2h))
+  symbol_A = simulator.get_id("A")
+  symbol_x = simulator.get_id("x")
+  symbol_y = simulator.get_id("y")
+  symbol_nrm = simulator.get_id("nrm")
+  print(f"symbol_A = {symbol_A}")
+  print(f"symbol_x = {symbol_x}")
+  print(f"symbol_y = {symbol_y}")
+  print(f"symbol_nrm = {symbol_nrm}")
+
+  simulator.load()
+  simulator.run()
 
   # A is M-by-N
   iportmap_A = f"{{ A[j=0:{M-1}][i=0:{N-1}] -> [PE[i//{LOCAL_IN_SZ}, j//{LOCAL_OUT_SZ}] -> \
@@ -267,25 +314,52 @@ def main():
   oportmap_nrm_r = "{ nrm_r[i=0:0][j=0] -> [PE[1, 0] -> index[i]] }"
   print(f"oportmap_nrm_r = {oportmap_nrm_r}")
 
-  simulator.add_input_tensor(c_h2d[0], iportmap_A, A)
-  simulator.add_input_tensor(c_h2d[1], iportmap_x, x)
-  simulator.add_input_tensor(c_h2d[2], iportmap_b, b)
+  # prepare A, x and b via memcpy
+  # use the runtime_utils library to calculate memcpy args and shuffle data
+  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_A, A)
+  simulator.memcpy_h2d(symbol_A, data, False, px, py, w, h, l, 0, False)
+  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_x, x)
+  simulator.memcpy_h2d(symbol_x, data, False, px, py, w, h, l, 0, False)
+  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_b, b)
+  simulator.memcpy_h2d(symbol_y, data, False, px, py, w, h, l, 0, False)
 
-  simulator.add_output_tensor(c_d2h[0], oportmap_nrm_r, np.float32)
+  # trigger the computation
+  h_params = np.zeros(2).astype(np.uint32)
+  # format of h_params
+  #  +---------------------+
+  #  | # of wvlts          | 1st wavelet
+  #  +---------------------+
+  #  | param 1             | 2nd wavelet
+  #  +---------------------+
+  #  | param 2             | 3rd wavelet
+  #  +---------------------+
+  #  | param 3             | 4th wavelet
+  #  +---------------------+
+  #  | ...                 |
+  #  +---------------------+
+  #  | ID of the function  | last wavelet
+  #  +---------------------+
+  # h_params has K+2 wavelets where K = number of parameters
+  h_params[0] = cast_uint32(0) # number of wavelets
+  h_params[1] = cast_uint32(np.int16(0)) # ID of the function
+  simulator.memcpy_launch(LAUNCH, h_params, False)
 
-  simulator.connect_and_run()
+  # receive |b-A*x| from P1.1
+  # use the runtime_utils library to calculate memcpy args and manage output data
+  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap_nrm_r, np.float32)
+  simulator.memcpy_d2h(data, symbol_nrm, False, px, py, w, h, l, 0, False)
+  nrm_r_cs = runtime_utils.format_output_tensor(oportmap_nrm_r, np.float32, data)
+
+  simulator.stop()
 
   if args.cmaddr is None:
     # move simulation log and core dump to the given folder
-    mv_sim_cmd = f"mv sim.log {sim_log}"
-    os.system(mv_sim_cmd)
+    shutil.move("sim.log", sim_log)
 
-    mv_simfab_traces_cmd = f"mv simfab_traces {args.name}"
-    ret = os.system(mv_simfab_traces_cmd)
-    err_msg = f"{args.name}/simfab_traces exists, please remove it first"
-    assert ret == 0, err_msg
-
-  nrm_r_cs = simulator.out_tensor_dict["nrm_r"]
+    dst = Path(f"{args.name}/simfab_traces")
+    if dst.exists():
+      shutil.rmtree(dst)
+    shutil.move("simfab_traces", dst)
 
   print(f"`nrm_r`     from CPU:\n{nrm_r}")
   print(f"`nrm_r_cs`  from CS1 (1-by-1 matrix):\n{nrm_r_cs}")

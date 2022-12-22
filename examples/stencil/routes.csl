@@ -17,6 +17,7 @@
 // of TotalEnergies EP Research & Technology US.                              //
 ////////////////////////////////////////////////////////////////////////////////
 
+const directions = @import_module("<directions>");
 const util = @import_module("util.csl");
 
 param pattern: u16;
@@ -59,7 +60,7 @@ fn twoPatternRoute(dir: direction, pattFirst: bool, pattLast: bool,
     .switches = .{
       .ring_mode = true,
       .pos1 = .{ .tx = RAMP },
-      .pos2 = .{ .rx = util.oppositeDirection(dir) },
+      .pos2 = .{ .rx = directions.flip(dir) },
       .current_switch_pos = initialSwitchPosition(pattFirst, pattLast, 2)
     }
   };
@@ -69,7 +70,7 @@ fn genericRoute(dir: direction, notNeedsPos3: bool, pattFirst: bool,
     pattLast: bool, isLast: bool) comptime_struct {
   // The first `pattern - 1` PEs always forward, unless they're at the edge.
   const routes: comptime_struct = .{
-    .rx = .{ util.oppositeDirection(dir) },
+    .rx = .{ directions.flip(dir) },
     .tx = computeTxDir(dir, isLast),
     .pop_mode = .{ .always_pop = true }
   };
@@ -86,7 +87,7 @@ fn genericRoute(dir: direction, notNeedsPos3: bool, pattFirst: bool,
   return .{
     .routes = routes,
     .switches = @concat_structs(switches, .{
-      .pos3 = .{ .rx = util.oppositeDirection(dir) },
+      .pos3 = .{ .rx = directions.flip(dir) },
       .current_switch_pos = initialSwitchPosition(pattFirst, pattLast)
     })
   };
