@@ -19,14 +19,18 @@
 import struct
 import json
 import os
+import shutil
 import subprocess
 import time
-from typing import List
 from glob import glob
+from pathlib import Path
+from typing import List
 from ic import computeGaussianSource
 import numpy as np
 from cmd_parser import parse_args
-from cerebras.elf.cs_elf_runner import CSELFRunner
+
+from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime # pylint: disable=no-name-in-module
 
 SIZE = 10
 ZDIM = 10
@@ -60,6 +64,20 @@ def sub_ts(words):
   return make_u48(words[3:]) - make_u48(words[0:3])
 
 
+def cast_uint32(x):
+  if isinstance(x, (np.float16, np.int16, np.uint16)):
+    z = x.view(np.uint16)
+    return np.uint32(z)
+  if isinstance(x, (np.float32, np.int32, np.uint32)):
+    return x.view(np.uint32)
+  if isinstance(x, int):
+    return np.uint32(x)
+  if isinstance(x, float):
+    z = np.float32(x)
+    return z.view(np.uint32)
+
+  raise RuntimeError(f"type of x {type(x)} is not supported")
+
 
 def csl_compile(
     cslc: str,
@@ -77,13 +95,12 @@ def csl_compile(
     fabric_width: int,
     fabric_height: int,
     name: str,
-    c_h2d: List[int],
-    c_d2h: List[int]
+    c_launch: int,
+    n_channels: int,
+    width_west_buf: int,
+    width_east_buf: int
 )  -> List[str]:
   """Generate ELFs for the layout."""
-
-  assert core_fabric_offset_x == 4
-  assert core_fabric_offset_y == 1
 
   start = time.time()
   # CSL Compilation Step
@@ -95,18 +112,15 @@ def csl_compile(
   args.append(f"--params=width:{width},height:{height},zDim:{zDim},sourceLength:{sourceLength}")
   args.append(f"--params=dx:{dx}")
   args.append(f"--params=srcX:{srcX},srcY:{srcY},srcZ:{srcZ}")
-  args.append(f"--arch={arch}")
   args.append("--verbose")
-  args.append("--memcpy")
   args.append(f"-o={name}_code")
-  num_h2d = len(c_h2d)
-  for j in range(num_h2d):
-    c = c_h2d[j]
-    args.append(f"--params=MEMCPYH2D_DATA_{j+1}_ID:{c}")
-  num_d2h = len(c_d2h)
-  for j in range(num_d2h):
-    c = c_d2h[j]
-    args.append(f"--params=MEMCPYD2H_DATA_{j+1}_ID:{c}")
+  args.append(f"--params=LAUNCH_ID:{c_launch}") # options
+  if arch is not None:
+    args.append(f"--arch={arch}")
+  args.append("--memcpy")
+  args.append(f"--channels={n_channels}")
+  args.append(f"--width-west-buf={width_west_buf}")
+  args.append(f"--width-east-buf={width_east_buf}")
   print(f"subprocess.check_call(args = {args}")
   subprocess.check_call(args)
 
@@ -131,6 +145,12 @@ def main():
   dx = args.dx
   iterations = args.iterations
 
+  n_channels = args.n_channels
+  width_west_buf = args.width_west_buf
+  width_east_buf = args.width_east_buf
+  print(f"n_channels = {n_channels}")
+  print(f"width_west_buf = {width_west_buf}, width_east_buf = {width_east_buf}")
+
   source, sourceLength = computeGaussianSource(iterations)
   print("Gaussian source computed")
   print(f"sourceLength = {sourceLength}")
@@ -138,10 +158,8 @@ def main():
 
   if args.skip_compile:
     # Parse the compile metadata
-    compile_data = None
     with open(f"{name}_code/out.json", encoding="utf-8") as json_file:
       compile_data = json.load(json_file)
-    assert compile_data is not None
 
     size = int(compile_data["params"]["width"])
     zDim = int(compile_data["params"]["zDim"])
@@ -159,7 +177,7 @@ def main():
   if args.fabric_width is not None:
     fabric_width = args.fabric_width
   else:
-    fabric_width = fabric_offset_x + width + 5 + 1
+    fabric_width = fabric_offset_x + 3 + width + 2 + 1 + width_west_buf + width_east_buf
 
   if args.fabric_height is not None:
     fabric_height = args.fabric_height
@@ -170,12 +188,12 @@ def main():
   print(f"fabric_offset_x = {fabric_offset_x}, fabric_offset_y={fabric_offset_y}")
   print(f"fabric_width = {fabric_width}, fabric_height={fabric_height}")
 
-  assert fabric_width >= (fabric_offset_x + width + 5 + 1)
+  assert fabric_width >= (fabric_offset_x + width + 5 + 1 + width_west_buf + width_east_buf)
   assert fabric_height >= (fabric_offset_y + height + 1)
 
-  srcX = int(width / 2) - 5
-  srcY = int(height / 2) - 5
-  srcZ = int(zDim / 2) - 5
+  srcX = width // 2 - 5
+  srcY = height // 2 - 5
+  srcZ = zDim // 2 - 5
   assert srcX >= 0
   assert srcY >= 0
   assert srcZ >= 0
@@ -183,20 +201,9 @@ def main():
   print(f"srcY (y-coordinate of the source) = height/2 - 5 = {srcY}")
   print(f"srcZ (z-coordinate of the source) = zdim/2 - 5   = {srcZ}")
 
-  MEMCPYH2D_DATA_1 = 0  # 1st H2D
+  c_launch = 0
 
-  MEMCPYD2H_DATA_1 = 1  # 1st D2H
-  MEMCPYD2H_DATA_2 = 2  # 2nd D2H
-
-  c_h2d = []
-  c_h2d.append(MEMCPYH2D_DATA_1)
-
-  c_d2h = []
-  c_d2h.append(MEMCPYD2H_DATA_1)
-  c_d2h.append(MEMCPYD2H_DATA_2)
-
-  print(f"c_h2d = {c_h2d}")
-  print(f"c_d2h = {c_d2h}")
+  print(f"c_launch = {c_launch}")
 
   if not args.skip_compile:
     print("Cleaned up existing elf files before compilation")
@@ -204,7 +211,7 @@ def main():
     for felf in elf_paths:
       os.remove(felf)
 
-    core_fabric_offset_x = fabric_offset_x + 3
+    core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
     core_fabric_offset_y = fabric_offset_y
 
     start = time.time()
@@ -212,8 +219,10 @@ def main():
         cslc, arch_default, width, height, core_fabric_offset_x, core_fabric_offset_y,
         zDim, sourceLength, dx, srcX, srcY, srcZ,
         fabric_width, fabric_height, name,
-        c_h2d,
-        c_d2h)
+        c_launch,
+        n_channels,
+        width_west_buf,
+        width_east_buf)
     end = time.time()
     print(f"compilation of kernel in {end-start}s")
   else:
@@ -238,75 +247,102 @@ def main():
     source_all[offset] = source[tidx]
   source_all = source_all.reshape(height, width, zDim)
 
-  # - iterations: f32
-  # - vp : f32[zDim]
-  # - source: f32[zDim]
-  h2d_data = np.zeros(width*height*(2*zDim+1)).reshape(height, width, (2*zDim+1)).astype(np.float32)
-
-  for h in range(height):
-    for w in range(width):
-      h2d_data[(h, w, 0)] = iterations
-      for l in range(zDim):
-        h2d_data[(h, w, l+1)] = vp[(h, w, l)]
-      for l in range(zDim):
-        h2d_data[(h, w, l+1+zDim)] = source_all[(h, w, l)]
-
-# prepare the simulation
-  elf_list = glob(f"{name}_code/bin/out_[0-9]*.elf")
-  elfs_east = glob(f"{name}_code/east/bin/out_[0-9]*.elf")
-  elfs_west = glob(f"{name}_code/west/bin/out_[0-9]*.elf")
-
-  elf_list = elf_list + elfs_east + elfs_west
-  print(f"elf_list = {elf_list}")
-
 #
-# Step 2: the user creates CSRunner with user's kernel image
+# Step 2: the user creates CSRunner
 #
-  simulator = CSELFRunner(elf_list, debug_mode=True, cmaddr=args.cmaddr,\
-        height=height, width=width, input_colors=set(c_h2d), output_colors=set(c_d2h))
+  dirname = f"{name}_code"
+  simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
+  symbol_vp = simulator.get_id("vp")
+  symbol_source = simulator.get_id("source")
+  symbol_maxmin_time = simulator.get_id("maxmin_time")
+  symbol_zout = simulator.get_id("zout")
+  print(f"symbol_vp = {symbol_vp}")
+  print(f"symbol_source = {symbol_source}")
+  print(f"symbol_maxmin_time = {symbol_maxmin_time}")
+  print(f"symbol_zout = {symbol_zout}")
+
+  simulator.load()
+  simulator.run()
+
+  start = time.time()
 #
-# Step 3: The user has to specify H2D/D2H
+# Step 3: The user has to prepare the sequence of H2D/D2H/RPC
 #
-  # H2D [h][w][2*zDim+1]
-  iportmapA = f"{{ A[j=0:{height-1}][i=0:{width-1}][k=0:{2*zDim+1-1}] \
+  # H2D vp[h][w][zDim]
+  iportmap_vp = f"{{ vp[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] \
     -> [PE[i, j] -> index[k]] }}"
+  # H2D source[h][w][zDim]
+  iportmap_source = f"{{ source[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] \
+    -> [PE[i, j] -> index[k]] }}"
+
+  # use the runtime_utils library to calculate memcpy args and shuffle data
+  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_vp, vp)
+  simulator.memcpy_h2d(symbol_vp, data, False, px, py, w, h, l, 0, False)
+  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_source, source_all)
+  simulator.memcpy_h2d(symbol_source, data, False, px, py, w, h, l, 0, False)
+
+  # time marching: trigger f_comp()
+  h_params = np.zeros(3).astype(np.uint32)
+  # format of h_params
+  #  +---------------------+
+  #  | # of wvlts          | 1st wavelet
+  #  +---------------------+
+  #  | param 1             | 2nd wavelet
+  #  +---------------------+
+  #  | param 2             | 3rd wavelet
+  #  +---------------------+
+  #  | param 3             | 4th wavelet
+  #  +---------------------+
+  #  | ...                 |
+  #  +---------------------+
+  #  | ID of the function  | last wavelet
+  #  +---------------------+
+  # h_params has K+2 wavelets where K = number of parameters
+
+  h_params[0] = cast_uint32(1) # number of wavelets
+  h_params[1] = cast_uint32(iterations) # number of iterations
+  h_params[2] = cast_uint32(np.int16(0)) # ID of the function
+  simulator.memcpy_launch(c_launch, h_params, False)
+
   # D2H [h][w][5]
   oportmap1 = f"{{ maxmin_time[j=0:{height-1}][i=0:{width-1}][k=0:{5-1}] \
     -> [PE[i, j] -> index[k]] }}"
+  # use the runtime_utils library to calculate memcpy args and manage output data
+  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap1, np.float32)
+  simulator.memcpy_d2h(data, symbol_maxmin_time, False, px, py, w, h, l, 0, False)
+  maxmin_time_hwl = runtime_utils.format_output_tensor(oportmap1, np.float32, data)
+
+  # prepare zout: call f_prepare_zout()
+  h_params = np.zeros(2).astype(np.uint32)
+  h_params[0] = cast_uint32(0) # number of wavelets
+  h_params[1] = cast_uint32(np.int16(1)) # ID of the function
+  simulator.memcpy_launch(c_launch, h_params, False)
+
   # D2H [h][w][zDim]
   oportmap2 = f"{{ z[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] -> [PE[i, j] -> index[k]] }}"
+  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap2, np.float32)
+  simulator.memcpy_d2h(data, symbol_zout, False, px, py, w, h, l, 0, False)
+  z_hwl = runtime_utils.format_output_tensor(oportmap2, np.float32, data)
 
-  simulator.add_input_tensor(MEMCPYH2D_DATA_1, iportmapA, h2d_data)
-  simulator.add_output_tensor(MEMCPYD2H_DATA_1, oportmap1, np.float32)
-  simulator.add_output_tensor(MEMCPYD2H_DATA_2, oportmap2, np.float32)
-
-#
-# Step 4: run HW/simfab
-#
-  start = time.time()
-  simulator.connect_and_run()
+  simulator.stop()
   end = time.time()
+
   print(f"Run done in {end-start}s")
 
-  #[USER] move the sim log
   if args.cmaddr is None:
     # move simulation log and core dump to the given folder
-    sim_log = f"{name}_code/sim.log"
-    mv_sim_cmd = f"mv sim.log {sim_log}"
-    os.system(mv_sim_cmd)
+    sim_log = f"{dirname}/sim.log"
+    shutil.move("sim.log", sim_log)
 
-    mv_simfab_traces_cmd = f"mv simfab_traces {name}_code"
-    ret = os.system(mv_simfab_traces_cmd)
-    err_msg = f"{name}_code/simfab_traces exists, please remove it first"
-    assert ret == 0, err_msg
+    dst = Path(f"{dirname}/simfab_traces")
+    if dst.exists():
+      shutil.rmtree(dst)
+    shutil.move("simfab_traces", dst)
 
 #
-# step 5: verification
+# step 4: verification
 #
-  maxmin_time_hwl = simulator.out_tensor_dict["maxmin_time"]
-  z_hwl = simulator.out_tensor_dict["z"]
-
   # D2H(max/min)
   # d2h_buf_f32[0] = maxValue
   # d2h_buf_f32[1] = minValue

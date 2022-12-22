@@ -37,10 +37,8 @@ runner = CSELFRunner(elf_paths, cmaddr=args.cmaddr)
 np.random.seed(seed=7)
 
 # Parse the compile metadata
-compile_data = None
 with open(f"{name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
-assert compile_data is not None
 compile_params = compile_data["params"]
 size = int(compile_params["num_elements_to_process"])
 input_tensor = np.random.random(size).astype(np.float16)

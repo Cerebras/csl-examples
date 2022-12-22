@@ -85,13 +85,6 @@ def parse_args():
             help='Height of the fabric we are compiling for',
             )
 
-  parser.add_argument(
-            '-wout',
-            '--wavefield_out',
-            type=str,
-            help='Read output wavefield and write npz file',
-            default=None
-            )
   parser.add_argument('--cmaddr', help='IP:port for CS system')
 
   parser.add_argument(
@@ -100,9 +93,19 @@ def parse_args():
             )
 
   parser.add_argument(
-            "--enable-fifo",
-            help="enable fifo in mux", action="store_true"
-            )
+            "--width-west-buf",
+            default=0, type=int,
+            help="width of west buffer")
+  parser.add_argument(
+            "--width-east-buf",
+            default=0, type=int,
+            help="width of east buffer")
+  parser.add_argument(
+            "--n_channels",
+            default=1, type=int,
+            help="Number of memcpy \"channels\" (LVDS/streamers for both input and output)  to use \
+            when memcpy support is compiled with this program. If this argument is not present, \
+            or is 0, then the previous single-LVDS version is compiled.")
 
   args = parser.parse_args()
 

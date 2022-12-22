@@ -19,23 +19,6 @@ fn min(a: u16, b: u16) u16 {
   return b;
 }
 
-fn oppositeDirection(dir: direction) direction {
-  if (dir == WEST) {
-    return EAST;
-  }
-  if (dir == EAST) {
-    return WEST;
-  }
-  if (dir == NORTH) {
-    return SOUTH;
-  }
-  if (dir == SOUTH) {
-    return NORTH;
-  }
-  // Unhandled direction
-  @comptime_assert(false);
-}
-
 fn computeRelativePeId(peId: u16, peCount: u16, dir: direction) u16 {
   if (dir == EAST or dir == SOUTH) {
     return peId;

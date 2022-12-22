@@ -1,0 +1,101 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param c2d_params: comptime_struct;
+param chunk_size: u16;
+
+const rect_height = @get_rectangle().height;
+const rect_width = @get_rectangle().width;
+
+const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+const mpi_common = @import_module("<collectives_2d/common>", .{ .c2d_params = c2d_params });
+
+const x_color = @get_color(15);
+const y_color = @get_color(16);
+
+const Nx = chunk_size * rect_width;
+const Ny = chunk_size * rect_height;
+
+// broadcast_data and scatter_data supplied by run.py
+var broadcast_data = @zeros([Nx]u32);
+var broadcast_recv = @zeros([Nx]u32);
+var faddh_result = @zeros([Nx]u32);
+
+var scatter_data = @zeros([Ny]u32);
+var scatter_recv = @zeros([Ny]u32);
+var gather_recv = @zeros([Ny]u32);
+
+var task_x_state: u16 = 0;
+task task_x() void {
+   switch (task_x_state) {
+      0 => {
+         mpi_x.init(&mpi_common.pendings);
+         var send_buf = @ptrcast([*]u32, &broadcast_data);
+         var recv_buf = @ptrcast([*]u32, &broadcast_recv);
+         if (mpi_x.pe_id == 0) {
+            mpi_x.broadcast(0, send_buf, Nx, x_color);
+         } else {
+            mpi_x.broadcast(0, recv_buf, Nx, x_color);
+         }
+
+         task_x_state += 1;
+      },
+      1 => {
+         var send_buf = @ptrcast([*]f32, &broadcast_recv);
+         var recv_buf = @ptrcast([*]f32, &faddh_result);
+
+         mpi_x.reduce_fadds(0, send_buf, recv_buf, Nx, x_color);
+
+         task_x_state += 1;
+      },
+      else => {
+         return;
+      }
+   }
+}
+
+var task_y_state: u16 = 0;
+task task_y() void {
+   switch (task_y_state) {
+      0 => {
+         mpi_y.init(&mpi_common.pendings);
+         var send_buf = @ptrcast([*]u32, &scatter_data);
+         var recv_buf = @ptrcast([*]u32, &scatter_recv);
+
+         mpi_y.scatter(0, send_buf, recv_buf, chunk_size, y_color);
+
+         task_y_state += 1;
+      },
+      1 => {
+         var send_buf = @ptrcast([*]u32, &scatter_recv);
+         var recv_buf = @ptrcast([*]u32, &gather_recv);
+
+         mpi_y.gather(0, send_buf, recv_buf, chunk_size, y_color);
+
+         task_y_state += 1;
+      },
+      else => {
+         return;
+      }
+   }
+}
+
+comptime {
+   @bind_task(task_x, x_color);
+   @bind_task(task_y, y_color);
+
+   @activate(y_color);
+   @activate(x_color);
+}

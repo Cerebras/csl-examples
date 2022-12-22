@@ -24,9 +24,9 @@
 // color map of FD + memcpy:
 //
 // color  var             color  var          color  var              color  var
-//   0   MEMCPYH2D_DATA_1   9    westDataFin   18    northCtrlFin2     27   f_comp
-//   1   MEMCPYD2H_DATA_1  10    northDataFin  19    southCtrlFin2     28   reserved (memcpy)
-//   2   MEMCPYD2H_DATA_2  11    southDataFin  20    eastFin           29   reserved (memcpy)
+//   0   LAUNCH             9    westDataFin   18    northCtrlFin2     27   f_comp
+//   1                     10    northDataFin  19    southCtrlFin2     28   reserved (memcpy)
+//   2                     11    southDataFin  20    eastFin           29   reserved (memcpy)
 //   3   send              12    eastCtrlFin   21    reserved (memcpy) 30   reserved (memcpy)
 //   4   eastChannel       13    westCtrlFin   22    reserved (memcpy) 31   reserved
 //   5   westChannel       14    northCtrlFin  23    reserved (memcpy) 32
@@ -35,21 +35,9 @@
 //   8   eastDataFin       17    westCtrlFin2  26    southFin          35
 //
 
-param MEMCPYH2D_DATA_1_ID : u16;
-param MEMCPYD2H_DATA_1_ID : u16;
-param MEMCPYD2H_DATA_2_ID : u16;
+param LAUNCH_ID: i16;
 
-// H2D(iterations)
-// H2D(vp)
-// H2D(source)
-const MEMCPYH2D_DATA_1 : color = @get_color(MEMCPYH2D_DATA_1_ID);
-
-// D2H(max, min)
-// D2H(timestamp)
-const MEMCPYD2H_DATA_1 : color = @get_color(MEMCPYD2H_DATA_1_ID);
-// D2H(zValues)
-const MEMCPYD2H_DATA_2 : color = @get_color(MEMCPYD2H_DATA_2_ID);
-
+const LAUNCH : color = @get_color(LAUNCH_ID);
 param COMP: color  = @get_color(27);
 
 //---------------------------- FD code starts here
@@ -143,7 +131,7 @@ const invariants = .{
 
 const util = @import_module("util.csl");
 
-const memcpy = @import_module( "<memcpy/get_params>", .{
+const memcpy = @import_module( "<memcpy_multi/get_params>", .{
     .width = width,
     .height = height
     });
@@ -153,9 +141,7 @@ layout {
   @comptime_assert(pattern <= height);
   @comptime_assert(pattern > 1 and pattern < 8);
 
-  @comptime_assert(0 == MEMCPYH2D_DATA_1_ID);
-  @comptime_assert(1 == MEMCPYD2H_DATA_1_ID);
-  @comptime_assert(2 == MEMCPYD2H_DATA_2_ID);
+  @comptime_assert(0 == LAUNCH_ID);
 
   // step 1: configure the rectangle which does not include halo
   @set_rectangle(width, height);
@@ -242,9 +228,7 @@ layout {
       // additional colors for memcpy
       const params_task = @concat_structs( .{
             .COMP = COMP,
-            .MEMCPYH2D_DATA_1 = MEMCPYH2D_DATA_1,
-            .MEMCPYD2H_DATA_1 = MEMCPYD2H_DATA_1,
-            .MEMCPYD2H_DATA_2 = MEMCPYD2H_DATA_2,
+            .LAUNCH=LAUNCH,
             ._px=xId,
       }, params);
 
@@ -260,4 +244,9 @@ layout {
   // step 3: global and internal routing
   //  format: @set_color_config(x, y, color, route);
 
+  // export symbol name
+  @export_name("vp", [*]f32, true);
+  @export_name("source", [*]f32, true);
+  @export_name("maxmin_time", [*]f32, true);
+  @export_name("zout", [*]f32, true);
 }

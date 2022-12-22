@@ -1,0 +1,194 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This program demonstrates selective batch mode
+
+// When running batch with [inColorA, inColorB, outColorA]:
+// 1. A read in by WTT
+// 2. B read in by WTT
+// 3. Hadamard product calculated, stored in A;
+//    report_count decremented and iter_count updated
+// 4. A sent back to host
+
+// When running batch with [inColorC]:
+// 1. report_count copied to each PE
+
+// When running batch with [outColorB]:
+// 1. iter_count copied back to host, if report_count is 0
+
+// Program colors
+param MEMCPYH2D_DATA_1: color; // receives A from host
+param MEMCPYH2D_DATA_2: color; // receives B from host
+param MEMCPYH2D_DATA_3: color; // receives report_count from host
+
+param MEMCPYD2H_DATA_1: color; // sends Hadamard product to host
+param MEMCPYD2H_DATA_2: color; // sends iter_count to host
+
+param USER_SEND_1: color; // activates f_user_send_1
+param USER_SEND_2: color; // activates f_user_send_2
+param USER_COMP: color;   // activates f_user_comp
+
+// Parameters
+param first_pe: bool;
+param last_pe: bool;
+
+param height: u16;
+
+param pe_length: u16;
+
+const sys_mod = @import_module("<memcpy/memcpy>", .{
+     .MEMCPYH2D_1=MEMCPYH2D_DATA_1,
+     .MEMCPYH2D_2=MEMCPYH2D_DATA_2,
+     .MEMCPYH2D_3=MEMCPYH2D_DATA_3,
+
+     .MEMCPYD2H_1=MEMCPYD2H_DATA_1,
+     .MEMCPYD2H_2=MEMCPYD2H_DATA_2,
+     .first_pe=first_pe,
+     .last_pe=last_pe
+      });
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+const size : u16 = pe_length;
+var A = @zeros([size]f32);
+var B = @zeros([size]f32);
+
+var idxA : u16 = 0;
+var idxB : u16 = 0;
+
+var iter_count = @zeros([1]i32);
+var report_count : i32 = -1;
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+////////////////////////////////////////////////////////////////////////////////
+
+
+// Note use of different output queues in fabout DSDs
+
+// A stores Hadamard product of input A and input B
+const A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pe_length} -> A[i] });
+
+// Used to send Hadamard product back to host
+const A_out_dsd = @get_dsd(fabout_dsd, .{
+    .extent = pe_length,
+    .fabric_color = MEMCPYD2H_DATA_1,
+    .output_queue = 3
+});
+
+const iter_dsd = @get_dsd(mem1d_dsd,
+                          .{ .tensor_access = |i|{1} -> iter_count[i] });
+
+// Used to send iter_count back to host
+const iter_out_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = MEMCPYD2H_DATA_2,
+    .output_queue = 4
+});
+
+
+task f_user_comp() void {
+
+  var k : u16 = 0;
+
+  // Reset idxA and idxB for next batch
+  idxA = 0;
+  idxB = 0;
+
+  // Block MEMCPYH2D_DATA_2 for next batch
+  @block(MEMCPYH2D_DATA_2);
+
+  // Computes Hadamard product
+  while (k < pe_length) : (k +=1) {
+    var reg_A : f32 = A[k];
+    var reg_B : f32 = B[k];
+    A[k] = reg_A * reg_B;
+  }
+
+  // Performs additional computation reported back to host
+  // when running batch with outColorB and report_count == 0
+  iter_count[0] = 2*iter_count[0] + 1;
+  if (report_count >= 0) {
+    report_count -= 1;
+  }
+  if (report_count == 0) {
+    @activate(USER_SEND_2);
+  }
+
+// ---- streaming: send out C = A+B after f_comp
+// USER_SEND_[1|2] uses different output queue, so both run in parallel
+// even when one has backpressure
+  @activate(USER_SEND_1);
+//----
+}
+
+// Send A matrix to host
+task f_user_send_1() void {
+  @mov32(A_out_dsd, A_dsd, .{.async=true} );
+}
+
+// Send iter_count[0] to host
+task f_user_send_2() void {
+  @mov32(iter_out_dsd, iter_dsd, .{.async=true} );
+}
+
+// Receive elements of this PE's subtensor of A
+task f_memcpyh2d_data_1(data : f32) void {
+
+  A[idxA] = data;
+  idxA = idxA + 1;
+
+  if (idxA >= pe_length) {
+    // receive B only after A is received
+    @unblock(MEMCPYH2D_DATA_2);
+  }
+}
+
+// Receive elements of this PE's subtensor of B
+task f_memcpyh2d_data_2(data : f32) void {
+
+  B[idxB] = data;
+  idxB = idxB + 1;
+
+  if (idxB >= pe_length) {
+    // After B is received, calculate Hadamard product of A and B
+    @activate(USER_COMP);
+  }
+}
+
+// Set report_count once
+task f_memcpyh2d_data_3(data : i32) void {
+  report_count = data;
+}
+
+
+comptime {
+  @comptime_assert(pe_length <= size);
+
+  // Receive A first, then B
+  // Once B is received, compute A = A+B
+  @block(MEMCPYH2D_DATA_2);
+
+  @bind_task(f_memcpyh2d_data_1, MEMCPYH2D_DATA_1);
+  @bind_task(f_memcpyh2d_data_2, MEMCPYH2D_DATA_2);
+
+  @bind_task(f_user_send_1, USER_SEND_1);
+  @bind_task(f_user_comp, USER_COMP);
+
+  @bind_task(f_memcpyh2d_data_3, MEMCPYH2D_DATA_3);
+  @bind_task(f_user_send_2, USER_SEND_2);
+}

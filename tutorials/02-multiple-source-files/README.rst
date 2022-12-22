@@ -15,3 +15,6 @@ file.
 In addition to specifying the source file which contains program instructions,
 this example also parameterizes the code in the referenced file with a color
 value.
+
+This program assigns the value 42 to a variable, and then sends this value
+to the EAST on an output wavelet.
