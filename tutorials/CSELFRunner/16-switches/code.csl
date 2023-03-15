@@ -1,0 +1,56 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+const start: color = @get_color(8);
+
+const colorValue = 1;
+const channel: color = @get_color(colorValue);
+
+const out: color = @get_color(2);
+
+layout {
+  @set_rectangle(3, 3);
+
+  // Out of the nine PEs, the PE in the center (PE #1,1) will send four
+  // control wavelets to the PE's four adjacent neighbors.  These four
+  // adjacent numbers are programmed to receive the control wavelets, whereas
+  // all other PEs (i.e. the PEs at the corners of the rectangle) are
+  // programmed to contain no instructions or routes.
+
+  @set_tile_code(1, 1, "send.csl", .{
+    .mainColor = start, .txColor = channel, .colorValue = colorValue
+  });
+
+  @set_tile_code(1, 0, "recv.csl", .{
+    // Make this PE send the final message back to the host signaling completion
+    .rxColor = channel, .inDir = SOUTH, .fin = true, .outColor = out,
+  });
+
+  @set_tile_code(0, 1, "recv.csl", .{
+    .rxColor = channel, .inDir = EAST, .fin = false, .outColor = out,
+  });
+
+  @set_tile_code(2, 1, "recv.csl", .{
+    .rxColor = channel, .inDir = WEST, .fin = false, .outColor = out,
+  });
+
+  @set_tile_code(1, 2, "recv.csl", .{
+    .rxColor = channel, .inDir = NORTH, .fin = false, .outColor = out,
+  });
+
+  @set_tile_code(0, 0, "empty.csl");
+  @set_tile_code(2, 0, "empty.csl");
+  @set_tile_code(0, 2, "empty.csl");
+  @set_tile_code(2, 2, "empty.csl");
+}

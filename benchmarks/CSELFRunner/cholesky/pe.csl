@@ -1,0 +1,195 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// // This benchmark implements right-looking Cholesky factorization
+
+param px: u16;
+param py: u16;
+param Nt: u16;
+param row_color: color;
+param col_color: color;
+
+const P = @get_rectangle().height;
+
+const math = @import_module("<math>");
+
+const main_color = @get_color(17);
+const cont_color = @get_color(18);
+
+// Memory buffers
+var tile = @zeros([Nt,Nt]f32);
+var col_buf = @zeros([Nt]f32);
+var row_buf = @zeros([Nt]f32);
+
+// // Memory DSDs
+var tile_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i,0] });
+var col_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> col_buf[i] });
+var row_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> row_buf[i] });
+
+// // Column in/out DSDs
+var col_in = @get_dsd(fabin_dsd, .{ .fabric_color = col_color, .extent = Nt, .input_queue = @get_input_queue(0) });
+var col_out = @get_dsd(fabout_dsd, .{ .fabric_color = col_color, .extent = Nt, .output_queue = 1 });
+
+// // Row in/out DSDs
+const row_in = @get_dsd(fabin_dsd, .{ .fabric_color = row_color, .extent = Nt, .input_queue = @get_input_queue(2) });
+const row_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = Nt, .output_queue = 3 });
+
+// // Two wavelets of (ADV + NO_CE, NOP + NO_CE)
+const ctrl_buf = [2]u32 { (5 << 22) | (4 << 25), (5 << 22) | (4 << 25) };
+const ctrl_mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> ctrl_buf[i] });
+const row_ctrl_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = 2, .output_queue = 0, .control = true });
+
+var P_left: u16;
+var ti: u16;
+
+var iter: u16 = 0;
+task main() void {
+
+  P_left = iter / Nt;
+  ti = iter % Nt;
+
+  if (px < P_left) {
+    // If the fringe has moved on, we need to flip a switch to allow the next
+    // fringe to send out data
+    if (px != py) {
+      @mov32(row_ctrl_out, ctrl_mem);
+    }
+    return;
+  }
+
+  if (px == P_left and py == P_left) {
+
+    // Top left of the current fringe
+    const pivot = tile[ti, ti];
+    const invsqrt = math.invsqrt_f32(pivot);
+
+    @fmuls(tile_dsd, tile_dsd, invsqrt);
+
+    // If we're the top left PE for the current fringe, we send values down
+    // our column
+    if (px < P - 1) {
+      @mov32(col_out, tile_dsd, .{ .async = true, .activate = cont_color });
+    } else {
+      // Unless we don't even have a column because we're the bottom-right
+      // PE
+      @activate(cont_color);
+    }
+
+    var left_col_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i,0] });
+    var dest_row_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[0,i] });
+
+    left_col_dsd = @increment_dsd_offset(left_col_dsd,  @as(i16, Nt * (ti + 1) + (ti)), f32);
+    dest_row_dsd = @increment_dsd_offset(dest_row_dsd, @as(i16, (ti +1) * Nt + (ti + 1)), f32);
+
+    for (@range(u16, ti+1, Nt, 1)) |i| {
+      dest_row_dsd = @set_dsd_length(dest_row_dsd, i - ti);
+      @fmacs(dest_row_dsd, dest_row_dsd, left_col_dsd, -1.0 * tile[i,ti]);
+      dest_row_dsd = @increment_dsd_offset(dest_row_dsd, Nt, f32);
+    }
+
+  } else if (px == P_left) {
+    // Left edge of the current fringe
+    @mov32(col_buf_dsd, col_in, .{ .async = true, .activate = cont_color });
+
+  } else if (px == py) {
+    // Non-fringe diagonal
+    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_color });
+
+  } else {
+    // Non-fringe interior block
+    @block(cont_color);
+    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_color });
+    @mov32(col_buf_dsd, col_in, .{ .async = true, .unblock = cont_color });
+  }
+}
+
+// // Continuation task
+task cont() void {
+
+  if (px == P_left and py == P_left) {
+
+    tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
+    @activate(main_color);
+
+  } else if (px == P_left) {
+
+    var invsqrt = 1.0 / col_buf[ti];
+    @fmuls(tile_dsd, tile_dsd, invsqrt);
+
+    var dest_col_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i,0] });
+    dest_col_dsd = @increment_dsd_offset(dest_col_dsd, @as(i16, ti + 1), f32);
+
+
+
+    for (@range(u16, ti+1, Nt, 1)) |j| {
+      @fmacs(dest_col_dsd, dest_col_dsd, tile_dsd, -1.0 * col_buf[j]);
+      dest_col_dsd = @increment_dsd_offset(dest_col_dsd, 1, f32);
+    }
+    // for (@range(u16, Nt)) |i| {
+    //    for (@range(u16, ti+1, Nt, 1)) |j| {
+    //      tile[i,j] -= col_buf[j] * tile[i,ti];
+    //    }
+    // }
+
+
+    @mov32(row_out, tile_dsd, .{ .async = true, .activate = main_color });
+    tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
+
+  } else if (px == py) {
+    @assert(px > P_left);
+
+    var tile_row = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tile[0,i] });
+    for (@range(u16, Nt)) |i| {
+      tile_row = @set_dsd_length(tile_row, i + 1);
+      @fmacs(tile_row, tile_row, row_buf_dsd, -1.0 * row_buf[i]);
+      tile_row = @increment_dsd_offset(tile_row, Nt, f32);
+    }
+
+    if (py != P - 1) {
+      // If we're on the diagonal, our job is to take values we received along
+      // our row and send them down our column
+      @mov32(col_out, row_buf_dsd, .{ .async = true, .activate = main_color });
+    } else {
+      // Unless we're the bottom-right corner PE... in which case we don't
+      // have a column to send values down!
+      @activate(main_color);
+    }
+
+  } else {
+    @assert(px > P_left);
+
+    for (@range(u16, Nt)) |i| {
+      @fmacs(tile_dsd, tile_dsd, row_buf_dsd, -1.0 * col_buf[i]);
+      tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
+    }
+    tile_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i,0] });
+    @activate(main_color);
+  }
+
+  // Next time we go to the main task, we've moved up an iteration
+  iter += 1;
+}
+
+comptime {
+
+  @comptime_assert(px <= py);
+
+  @bind_task(main, main_color);
+  @activate(main_color);
+
+  @bind_task(cont, cont_color);
+
+  @block(col_color);
+  @block(row_color);
+}

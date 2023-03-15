@@ -1,0 +1,44 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; the top-level source file is code.csl.
+
+// Determines how many integers to allocate on the stack.
+param limit :i16;
+var result = @zeros([limit]i16);
+
+const memDsd = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{10} -> result[i]
+});
+
+fn fib(n: i16) i16 {
+  if (result[n] != 0 and n >= 0 and n < limit) {
+    return result[n];
+  }
+
+  if (n < 2) {
+    result[n] = 1;
+
+  } else {
+    result[n] = fib(n - 2) + fib(n - 1);
+  }
+
+  return result[n];
+}
+
+fn compute_fib_sequence(count: i16) void {
+  // The fib function accepts the index of the Fibonacci number to compute.
+  // The function populates the `result` variable.
+  fib(count - 1);
+}

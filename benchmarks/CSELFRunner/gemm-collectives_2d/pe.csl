@@ -1,0 +1,126 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This program implements the SUMMA matrix multiplication algorithm and is
+// written as an example to show how to use the `collectives_2d` library.
+
+// We perform GEMM in `P` many steps on a grid of `P x P` processors.
+// At each step `i`, PEs in the `i`th column broadcast their home tiles of `A`
+// to other PEs in their row, and PEs in the `i`th row broadcast their home
+// tiles of `B` to other PEs in their column. Once both broadcasts are complete
+// as determined by `x_done()` and `y_done()` both being activated,
+// each PE computes `C_tile += Ap * Bp` where `Ap` and `Bp` are pointers to
+// either the PE's home tile or the tile it received through broadcasts.
+
+param c2d_params: comptime_struct;
+const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+
+const timestamp = @import_module("<time>");
+var tsc_start_buffer = @zeros([timestamp.tsc_size_words]u16);
+var tsc_end_buffer = @zeros([timestamp.tsc_size_words]u16);
+
+// Task colors
+const compute_color = @get_color(12);
+const main_color = @get_color(13);
+const x_color = @get_color(14);
+const y_color = @get_color(15);
+
+// Matrix size params
+param Nt: u16;
+param Kt: u16;
+param Mt: u16;
+
+const P = @get_rectangle().width;
+
+// This PE's home tile of A, B, C
+// `A_tile` and `B_tile` will be populated with initial values by run.py
+var A_tile = @zeros([Nt,Kt]f32);
+var B_tile = @zeros([Kt,Mt]f32);
+var C_tile = @zeros([Nt,Mt]f32);
+
+// Temporary buffers for storing in-flight tiles of A and B
+var A_buffer = @zeros([Nt,Kt]f32);
+var B_buffer = @zeros([Kt,Mt]f32);
+
+var px: u16;
+var py: u16;
+
+task x_done() void {
+  @activate(compute_color);
+}
+
+task y_done() void {
+  @unblock(compute_color);
+}
+
+var step: u16 = 0;
+task main() void {
+  @assert(step < P);
+
+  // The first time through we need to initialize our state
+  if (step == 0) {
+    mpi_x.init();
+    mpi_y.init();
+    px = mpi_x.pe_id;
+    py = mpi_y.pe_id;
+
+    timestamp.enable_tsc();
+    timestamp.get_timestamp(&tsc_start_buffer);
+  }
+
+  // Communicate along both rows and columns
+  const Ap = if (px == step) &A_tile else &A_buffer;
+  const Bp = if (py == step) &B_tile else &B_buffer;
+  mpi_x.broadcast(step, @ptrcast([*]u32, Ap), Nt * Kt, x_color);
+  mpi_y.broadcast(step, @ptrcast([*]u32, Bp), Kt * Mt, y_color);
+}
+
+task compute() void {
+  const Ap = if (px == step) &A_tile else &A_buffer;
+  const Bp = if (py == step) &B_tile else &B_buffer;
+
+  // Do an fmacs based local GEMM
+  var A_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> A_tile[i,0] });
+  A_dsd = @set_dsd_base_addr(A_dsd, Ap);
+
+  for (@range(u16, Kt)) |k| {
+    var C_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> C_tile[i,0] });
+
+    for (@range(u16, Mt)) |j| {
+      const b = Bp.*[k,j];
+      @fmacs(C_dsd, C_dsd, A_dsd, b);
+      C_dsd = @increment_dsd_offset(C_dsd, 1, f32);
+    }
+    A_dsd = @increment_dsd_offset(A_dsd, 1, f32);
+  }
+
+  step += 1;
+  @block(compute_color);
+
+  if (step == P) {
+    timestamp.get_timestamp(&tsc_end_buffer);
+  } else {
+    @activate(main_color);
+  }
+}
+
+comptime {
+  @bind_task(main, main_color);
+  @bind_task(compute, compute_color);
+  @bind_task(x_done, x_color);
+  @bind_task(y_done, y_color);
+  @activate(main_color);
+  @block(compute_color);
+}

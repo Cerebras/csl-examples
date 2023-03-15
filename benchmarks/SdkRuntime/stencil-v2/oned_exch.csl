@@ -1,0 +1,163 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param channel: color;
+param dataFin: color;
+param ctrlFin: color;
+
+param pattern: u16;
+param queueId: u16;
+param dir: direction;
+param paddedZDim: u16;
+param senderCount: u16;
+
+param callback: task () void;
+param ctrlCallback: task () void;
+param constants: *const [pattern]f32;
+
+param pos: i16;
+param chunkSize: u16;
+
+const zOffset: i16 = pattern - 1;
+const zBufferSize = paddedZDim + 2 * (pattern - 1);
+
+param zValues: *[2, zBufferSize]f32;
+param buffer: *[4, pattern, chunkSize]f32;
+
+const util = @import_module("util.csl");
+const switches = @import_module("switches.csl");
+
+// Put the PE in receive mode to fetch a single chunk of elements.  Once the
+// (asynchronous) receive operation completes, trigger the callback function.
+fn recvMode() void {
+  const buffDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j|{senderCount, chunkSize} -> buffer[pos, i, j]
+  });
+
+  const fabInDsd = @get_dsd(fabin_dsd, .{
+    .fabric_color = channel,
+    .input_queue = @get_input_queue(4 + queueId),
+    .extent = senderCount * chunkSize,
+  });
+
+  const constDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j|{senderCount, chunkSize} -> constants[i]
+  });
+
+  // Minimig - target_3d.c:4,7,10,13 (or 5,8,11,14) and target_3d:30
+  // `vp` is folded into `constants` so this corresponds to one of:
+  // ```
+  // vp * (coefx[1]*(u[IDX3_l(i+1,j,k)]                   ) \
+  //      +coefx[2]*(u[IDX3_l(i+2,j,k)]                   ) \
+  //      +coefx[3]*(u[IDX3_l(i+3,j,k)]                   ) \
+  //      +coefx[4]*(u[IDX3_l(i+4,j,k)]                   ))
+  // ```
+  // or:
+  // ```
+  // vp * (coefx[1]*(                  +u[IDX3_l(i-1,j,k)]) \
+  //      +coefx[2]*(                  +u[IDX3_l(i-2,j,k)]) \
+  //      +coefx[3]*(                  +u[IDX3_l(i-3,j,k)]) \
+  //      +coefx[4]*(                  +u[IDX3_l(i-4,j,k)]))
+  // ```
+  // or:
+  // ```
+  // vp * (coefx[1]*(u[IDX3_l(i+1,j,k)]                   ) \
+  //      +coefx[2]*(u[IDX3_l(i+2,j,k)]                   ) \
+  //      +coefx[3]*(u[IDX3_l(i+3,j,k)]                   ) \
+  //      +coefx[4]*(u[IDX3_l(i+4,j,k)]                   ))
+  // ```
+  // or:
+  // ```
+  // vp * (coefy[1]*(                  +u[IDX3_l(i,j-1,k)]) \
+  //      +coefy[2]*(                  +u[IDX3_l(i,j-2,k)]) \
+  //      +coefy[3]*(                  +u[IDX3_l(i,j-3,k)]) \
+  //      +coefy[4]*(                  +u[IDX3_l(i,j-4,k)]))
+  // ```
+  const props = .{ .async = true, .activate = callback };
+  @fmuls(buffDsd, fabInDsd, constDsd, props);
+}
+
+// The following arrays define values for control wavelets, which update the
+// switch position at the recipient PEs.
+var ctrl0 = [1]u32 { switches.ctrl(switches.firstSwitchCommands(pattern)) };
+var ctrl1 = [1]u32 { switches.ctrl(switches.secondSwitchCommands()) };
+
+// This function is activated when we've finished (asynchronously) sending the
+// `chunkSize` data elements, so now it's time to send the first control
+// wavelet.
+task dataFinTask() void {
+  const fabOutCtrlDsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .control = true,
+    .fabric_color = channel,
+    .output_queue = queueId,
+  });
+
+  const ctrlDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> ctrl0[i]
+  });
+
+  @mov32(fabOutCtrlDsd, ctrlDsd, .{ .async = true, .activate = ctrlFinTask });
+}
+
+// This function is activated after we've finished (asynchronously) sending the
+// first control wavelet, so now we send the second control wavelet.
+task ctrlFinTask() void {
+  const fabOutCtrlDsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .control = true,
+    .fabric_color = channel,
+    .output_queue = queueId,
+  });
+
+  const ctrlDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> ctrl1[i]
+  });
+
+  const props = .{ .async = true, .activate = ctrlCallback };
+  @mov32(fabOutCtrlDsd, ctrlDsd, props);
+}
+
+comptime {
+  @bind_task(dataFinTask, dataFin);
+  @bind_task(ctrlFinTask, ctrlFin);
+}
+
+// Send data to the appropriate neighbor.  This function accepts a `offset`
+// value, which identifies the next chunk (of `numChunks`) of values to send.
+fn send(iterationCount: u32, offset: i16) void {
+  const fabOutDataDsd = @get_dsd(fabout_dsd, .{
+    .extent = chunkSize,
+    .fabric_color = channel,
+    .output_queue = queueId,
+  });
+
+  const props = .{ .async = true, .activate = dataFinTask };
+
+  if (iterationCount & 1 == 0) {
+    const __memDsd = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{chunkSize} -> zValues[1, zOffset + i]
+    });
+
+    const memDsd = @increment_dsd_offset(__memDsd, offset, f32);
+    @fmovs(fabOutDataDsd, memDsd, props);
+  } else {
+    const __memDsd = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{chunkSize} -> zValues[0, zOffset + i]
+    });
+
+    const memDsd = @increment_dsd_offset(__memDsd, offset, f32);
+    @fmovs(fabOutDataDsd, memDsd, props);
+  }
+}
