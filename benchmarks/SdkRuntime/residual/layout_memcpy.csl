@@ -1,0 +1,149 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example computes |b-A*x|_inf on a 2-by-2 rectangle which has P0.0, P0.1, P1.0 and P1.1
+// The matrix A is distributed to every PE via memcpy
+// The vector x is distributed to first row PEs via memcpy
+// The vector b is distributed to first column PEs via memcpy
+// P1.0 sends out the result |b-A*x| via memcpy
+//
+// Each PE receives the vector x and computes A*x locally, then performs a row reduction to finish y = b - A*x
+// The last column contains the vector y, and performs a column reduction to obtain |b-A*x|
+//
+// internal color PSUM is used in row reduction
+// internal color NRM is used in column reduction
+
+// global routing colors
+param LAUNCH_ID: i16;
+
+// (LOCAL_OUT_SZ, LOCAL_IN_SZ) is the dimension of local tensor
+//    A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ
+//    x is LOCAL_IN_SZ-by-1
+//    y is LOCAL_OUT_SZ-by-1
+//
+// The unit test sets up the parameters LOCAL_OUT_SZ and LOCAL_IN_SZ via cslc
+//    LOCAL_OUT_SZ = M / height
+//    LOCAL_IN_SZ  = N / width
+// where M, N are dimensions of global tensors A_global, x_global and y_global
+//    A_global is M-by-N
+//    x_global is N-by-1
+//    y_global is M-by-1
+param LOCAL_OUT_SZ : i16;
+param LOCAL_IN_SZ  : i16;
+
+param width: i16;
+param height: i16;
+
+const LAUNCH : color = @get_color(LAUNCH_ID);
+
+const RXACT_X: color  = @get_color(8) ;  // receive x
+const PSUM: color     = @get_color(9) ;  // row reduction
+const NRM: color      = @get_color(10) ; // column reduction
+
+// local tasks
+const COMP: color     = @get_color(12) ;
+const REDUCE: color   = @get_color(13) ;
+const DONE: color     = @get_color(14) ;
+
+// neither routing color nor local task
+const NONE: color     = @get_color(15) ; // NONE is don't care (neither routing color nor entrypoint)
+                             // the compiler emits an error for un-initialized colors or parameters
+                             // binding a non-routing local color to NONE to avoid the compilation error
+const EXIT: color     = @get_color(17);
+
+const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+    .width = width,
+    .height = height
+    });
+
+
+layout{
+
+    @comptime_assert(2 == width);
+    @comptime_assert(2 == height);
+
+    // step 1: configure the rectangle which does not include halo
+    @set_rectangle(width, height);
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    const comm_params = .{
+        .COMP=COMP,
+        .REDUCE=REDUCE,
+        .DONE=DONE,
+        .LOCAL_OUT_SZ=LOCAL_OUT_SZ,
+        .LOCAL_IN_SZ=LOCAL_IN_SZ,
+        .LAUNCH = LAUNCH,
+        .EXIT = EXIT
+    };
+
+    const memcpyParams0 = memcpy.get_params(0);
+    const route_00 = @concat_structs(
+        .{ .RXACT_X = NONE, .TXACT_X=RXACT_X, .RXACT_Y = NONE, .RXACT_NRM = NONE , .TXACT_Y = PSUM, .TXACT_NRM = NONE },
+        .{ .memcpyParams = memcpyParams0 } );
+    @set_tile_code(0, 0, "residual_memcpy.csl", @concat_structs(route_00, comm_params) );
+
+    const route_01 = @concat_structs(
+        .{ .RXACT_X = RXACT_X, .TXACT_X=NONE, .RXACT_Y = NONE, .RXACT_NRM = NONE , .TXACT_Y = PSUM, .TXACT_NRM = NONE },
+        .{ .memcpyParams = memcpyParams0 } );
+    @set_tile_code(0, 1, "residual_memcpy.csl", @concat_structs(route_01, comm_params) );
+
+
+    const memcpyParams1 = memcpy.get_params(1);
+    const route_10 = @concat_structs(
+        .{ .RXACT_X = NONE, .TXACT_X=RXACT_X, .RXACT_Y = PSUM , .RXACT_NRM = NRM , .TXACT_Y = NONE, .TXACT_NRM = NONE },
+        .{ .memcpyParams = memcpyParams1 } );
+    @set_tile_code(1, 0, "residual_memcpy.csl", @concat_structs(route_10, comm_params) );
+
+    const route_11 = @concat_structs(
+        .{ .RXACT_X = RXACT_X, .TXACT_X=NONE, .RXACT_Y = PSUM , .RXACT_NRM = NONE, .TXACT_Y = NONE, .TXACT_NRM = NRM },
+        .{ .memcpyParams = memcpyParams1 } );
+    @set_tile_code(1, 1, "residual_memcpy.csl", @concat_structs(route_11, comm_params) );
+
+    // step 3: global and internal routing
+    //  format: @set_color_config(x, y, color, route);
+
+    // routing of RXACT_X
+    // - cliff distribution of x along columns
+    // - broadcast from the north to the south
+    // py = 0 receives x via H2D_2, and forwards x to south
+    // py = 1 receives x from north
+    @set_color_config(0, 0, RXACT_X, .{ .routes = .{ .rx = .{RAMP},  .tx = .{SOUTH} } });
+    @set_color_config(0, 1, RXACT_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } });
+
+    @set_color_config(1, 0, RXACT_X, .{ .routes = .{ .rx = .{RAMP}, .tx = .{SOUTH} } });
+    @set_color_config(1, 1, RXACT_X, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } });
+
+    // routing of PSUM (for row reduction)
+    // P0.0, P0.1: send partial sum
+    // P1.0, P1.1: receive partial sum
+    @set_color_config(0, 0, PSUM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+    @set_color_config(0, 1, PSUM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+    @set_color_config(1, 0, PSUM, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+    @set_color_config(1, 1, PSUM, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+
+    // routing of NRM (for column reduction)
+    // P1.0: receive local nrm from P1.1
+    // P1.1: send local nrm to P1.0
+    @set_color_config(1, 0, NRM, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } });
+    @set_color_config(1, 1, NRM, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } });
+
+    // export symbol name
+    @export_name("A", [*]f32, true);
+    @export_name("x", [*]f32, true);
+    @export_name("y", [*]f32, true);
+    @export_name("nrm", [*]f32, true);
+    @export_name("bcast_x", fn()void);
+}

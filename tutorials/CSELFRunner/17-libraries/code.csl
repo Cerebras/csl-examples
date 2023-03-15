@@ -1,0 +1,97 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param iterations: u32;
+
+const mainColor: color = @get_color(8);
+const resultColor: color = @get_color(1);
+const timeStampColor: color = @get_color(2);
+
+// Import compiler-bundled libraries, which are identified by names surrounded
+// by angular brackets ('<' and '>').
+const random = @import_module("<random>");
+const tsc = @import_module("<time>");
+const math = @import_module("<math>");
+
+// Declare variables for storing the timestamp counter at the start and the end
+// of the core computation.
+var startBuffer = @zeros([tsc.tsc_size_words]u16);
+var finishBuffer = @zeros([tsc.tsc_size_words]u16);
+
+/// Send the final result to the host.
+fn sendResult(result: f32) void {
+  const resultDsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = resultColor,
+  });
+
+  @fmovs(resultDsd, result);
+}
+
+/// Send the begin and end timestamp counters to the host, which then performs a
+/// 48-bit subtraction to get the final cycle count.
+fn sendTimeStampCounters() void {
+  const startBufferDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{tsc.tsc_size_words} -> startBuffer[i]
+  });
+
+  const finishBufferDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{tsc.tsc_size_words} -> finishBuffer[i]
+  });
+
+  const timeStampDsd = @get_dsd(fabout_dsd, .{
+    .extent = tsc.tsc_size_words,
+    .fabric_color = timeStampColor,
+  });
+
+  @mov16(timeStampDsd, startBufferDsd);
+  @mov16(timeStampDsd, finishBufferDsd);
+}
+
+task mainTask() void {
+  var idx: u32 = 0;
+  var hitCount: u32 = 0;
+
+  tsc.enable_tsc();
+  tsc.get_timestamp(&startBuffer);
+
+  // For each iteration, compute two random values between -1 and +1, and check
+  // whether they are inside the circle of unit radius.
+  while (idx < iterations) : (idx += 1) {
+    var x = random.random_f32(-1.0, 1.0);
+    var y = random.random_f32(-1.0, 1.0);
+    var distanceFromOrigin = math.sqrt_f32(x * x + y * y);
+
+    if (distanceFromOrigin <= 1.0) {
+      hitCount += 1;
+    }
+  }
+
+  tsc.get_timestamp(&finishBuffer);
+  sendResult(4.0 * @as(f32, hitCount) / @as(f32, iterations));
+  sendTimeStampCounters();
+}
+
+comptime {
+  @bind_task(mainTask, mainColor);
+  @activate(mainColor);
+}
+
+layout {
+  @set_rectangle(1, 1);
+  @set_tile_code(0, 0, "code.csl", .{ .iterations = iterations } );
+
+  @set_color_config(0, 0, resultColor, .{.routes = .{.rx = .{ RAMP }, .tx = .{ EAST }}});
+  @set_color_config(0, 0, timeStampColor, .{.routes = .{.rx = .{ RAMP }, .tx = .{ EAST }}});
+}
