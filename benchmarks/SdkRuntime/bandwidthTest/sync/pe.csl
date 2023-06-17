@@ -65,7 +65,7 @@ var fab_recv_data_px_wdsd =  @get_dsd(fabin_dsd, .{
 var fab_trans_data_px_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_send_px,
-    .output_queue = output_queues[0]
+    .output_queue = @get_output_queue(output_queues[0])
 });
 
 var fab_recv_data_py_wdsd =  @get_dsd(fabin_dsd, .{
@@ -77,7 +77,7 @@ var fab_recv_data_py_wdsd =  @get_dsd(fabin_dsd, .{
 var fab_trans_data_py_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_send_py,
-    .output_queue = output_queues[1]
+    .output_queue = @get_output_queue(output_queues[1])
 });
 
 var fab_recv_data_bcast_wdsd =  @get_dsd(fabin_dsd, .{
@@ -89,7 +89,7 @@ var fab_recv_data_bcast_wdsd =  @get_dsd(fabin_dsd, .{
 var fab_trans_data_bcast_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_bcast,
-    .output_queue = output_queues[2]
+    .output_queue = @get_output_queue(output_queues[2])
 });
 
 

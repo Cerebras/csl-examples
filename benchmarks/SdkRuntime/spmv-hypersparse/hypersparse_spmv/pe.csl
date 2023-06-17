@@ -1,0 +1,2002 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// To continue next command, f_callback = sys_mod.unblock_cmd_stream
+param f_callback : fn ()void;
+
+param input_queues:[4]u16;
+param output_queues:[2]u16;
+
+// explicit DSR allocation
+param dest_dsr_ids:[6]u16;
+param src1_dsr_ids:[6]u16;
+
+
+// fabric colors
+param north_train: color;
+param south_train: color;
+param rx_west_train: color;
+param rx_east_train: color;
+param tx_west_train: color;
+param tx_east_train: color;
+
+// local colors
+param init: color;
+param compute_north: color;
+param compute_south: color;
+param compute_local: color;
+param curr_rx_north_done: color;
+param curr_rx_south_done: color;
+param tx_north: color;
+param tx_south: color;
+param rx_north: color;
+param rx_south: color;
+param tx_west: color;
+param tx_east: color;
+param rx_west: color;
+param rx_east: color;
+
+// in matrix params
+param ncols: u32;       // full matrix size x
+param nrows: u32;       // full matrix size y
+param max_local_nnz: u16;   // local number of nonzeros
+param max_local_nnz_cols: u16;  // max of local number of nnz cols
+param max_local_nnz_rows: u16;  // max of local number of nnz rows
+// in vector params
+param local_vec_sz: u16;            // local vector block size per PE (padded)
+// out vector params
+param local_out_vec_sz: u16;        // local vector block size for final output vector (padded)
+param y_pad_start_row_idx: u16;     // local row idx where padding starts in y
+
+// fabric params
+param pcols: u16;   // fab size x
+param prows: u16;   // fab size y
+
+param is_first_col: bool; // pcol_id == 0
+param is_last_col: bool;  // pcol_id == (pcols - 1)
+param is_first_row: bool; // prow_id == 0
+param is_second_row: bool; // prow_id == 1
+param is_last_row: bool;   // prow_id == (prows - 1)
+param is_second_last_row: bool; // prow_id == (prows - 2)
+
+// The structure of the matrix prepared by the caller
+// The content can be modified for each spmv() call
+// data buffers
+// input matrix
+param mat_vals_buf : *[max_local_nnz]f32;      // in matrix values (sparse): 4B
+
+param mat_rows_buf : *[max_local_nnz]u16;      // in matrix relative row offsets: 2B
+                                                // need this in preprocessing: 2B
+param mat_col_idx_buf : *[max_local_nnz_cols]u16;   // column idx of nnz cols (max possible size is nnz)
+param mat_col_loc_buf : *[max_local_nnz_cols]u16;   // col location in mat_vals_buf and mat_rows_buf (max nnz)
+param mat_col_len_buf : *[max_local_nnz_cols]u16;   // col length (nnz rows in a col)
+// precomputed output vector (sparse format) local rows index information
+param y_rows_init_buf : *[max_local_nnz_rows]u16;       // init -- this should not be modified
+
+param local_nnz : *[1]u16;         // actual local number of nonzeros
+param local_nnz_cols : *[1]u16;    // actual local number of nnz cols
+param local_nnz_rows : *[1]u16;    // actual local number of nnz rows
+
+// input vector: for north-going and south-going trains
+// buffer storing data for tx
+var x_tx_buf : *[local_vec_sz]f32;       // in vector values (dense): 4B
+
+// final reduced local output vector (dense)
+// WARNING: the pointer of unknown size cannot pass the compilation
+//     The declaration "var y_local_buf : [*]f32;" emits the following error
+//  dereferencing a pointer to an unknown number of elements ('[*]f32') is illegal
+//
+// If we want to ping-pong the spmv by
+//    spmv(x, y) // y = A*x
+//    spmv(y, x) // x = A*y
+// we need to make sure local_vec_sz = local_out_vec_sz, otherwise compilation fails
+// because of mismatch of the dimensions
+//
+var y_local_buf : *[local_out_vec_sz]f32;
+
+// The coordinate (px, py) is decided at runtime
+// px = pcol_id
+// py = prow_id
+var pcol_id: u16 = 0;
+var prow_id: u16 = 0;
+
+const fabric = @import_module("<layout>");
+fn get_x_coord() u16 {
+    return fabric.get_x_coord();
+}
+fn get_y_coord() u16 {
+    return fabric.get_y_coord();
+}
+
+// tsc library
+const timestamp = @import_module("<time>");
+var tsc_reduce_start_buffer = @zeros([timestamp.tsc_size_words]u16);
+var tsc_reduce_end_buffer = @zeros([timestamp.tsc_size_words]u16);
+
+// These magical addresses from the ISA are in words, and we need bytes, so we
+// multiply by 2.
+// for UT priority
+const ce_inpq0_cfg: u16 = 0x7F58 * 2;
+const ce_inpq1_cfg: u16 = 0x7F59 * 2;
+const ce_inpq2_cfg: u16 = 0x7F5A * 2;
+const ce_inpq3_cfg: u16 = 0x7F5B * 2;
+const ce_inpq4_cfg: u16 = 0x7F5C * 2;
+const ce_inpq5_cfg: u16 = 0x7F5D * 2;
+const ce_inpq6_cfg: u16 = 0x7F5E * 2;
+const ce_inpq7_cfg: u16 = 0x7F5F * 2;
+const UT_MED_PRI: u16 = 0x100;  // bit 8
+const UT_HI_PRI: u16 = 0x200;   // bit 9
+
+// for task priority
+// const task_pri_cfg: u16 = 0x7E09 * 2;
+// const COMP_LO_PRI: u16 = 0x73FD;    // all comp tasks at 17, 26, 27 at task_pri=0, else at 1
+
+////// HACKY WAY ////////////
+// some value to let everyone load their elves first.
+// tsc value is u48, it is assumed that tssync will be performed beforehand, otherwise this is futile
+// NOTE: This is only needed to measure performance reliably. Functionality is not affected.
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0xa000, 0x21db, 0x5d };    // 400B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x2c00, 0x7da0, 0x51 };    // 350B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0xb800, 0xd964, 0x45 };    // 300B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x4400, 0x3529, 0x3a };    // 250B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0xd000, 0x90ed, 0x2e };    // 200B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x4000, 0x40be, 0x25 };    // 160B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0xe800, 0x4876, 0x17 };    // 100B cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x0900, 0x3d0, 0x0 };      // 4M cycles
+// var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x9c40, 0x0, 0x0 };        // 40K cycles
+var TSC_VALUE_TO_WAIT_UNTIL = [3]u16 { 0x3e8, 0x0, 0x0 };         // 1K cycles
+
+// WARNING: reserve input/output queue 0 for memcpy module
+// uthreads for fabric data movement
+const RX_NORTH_Q: u16 = input_queues[0];
+const RX_SOUTH_Q: u16 = input_queues[1];
+const TX_NORTH_Q: u16 = output_queues[0];
+const TX_SOUTH_Q: u16 = output_queues[1];
+// reduction trains, corresponding rx and tx are not active simultaneously
+// NOTE: the two phases are exclusive, so uthreads can actually be reused from north-south
+const TX_WEST_Q: u16 = output_queues[0];
+const TX_EAST_Q: u16 = output_queues[1];
+const RX_WEST_Q: u16 = input_queues[2];
+const RX_EAST_Q: u16 = input_queues[3];
+
+const dummy_f32 = @zeros([1]f32);
+
+// double buffers storing rx data
+var x_north_buf0 = @zeros([local_vec_sz]f32);   // in vector values (dense): 4B
+var x_south_buf0 = @zeros([local_vec_sz]f32);   // in vector values (dense): 4B
+var x_north_buf1 = @zeros([local_vec_sz]f32);   // in vector values (dense): 4B
+var x_south_buf1 = @zeros([local_vec_sz]f32);   // in vector values (dense): 4B
+
+// output vector (sparse): to store partial computed output vectors for north and south trains
+var y_vals_north_buf = @zeros([max_local_nnz_rows]f32);       // 4B
+var y_rows_north_buf = @zeros([max_local_nnz_rows]u16);       // 2B
+var y_vals_south_buf = @zeros([max_local_nnz_rows]f32);       // 4B
+var y_rows_south_buf = @zeros([max_local_nnz_rows]u16);       // 2B
+
+// buffers for east and west trains
+// NOTE: north and south buffers are reused for double buffering
+var y_vals_west_buf = @zeros([max_local_nnz_rows]f32);    // rx/tx vals on west-train during reduction (sparse): 4B
+var y_rows_west_buf = @zeros([max_local_nnz_rows]u16);    // rx/tx rows on west-train during reduction (sparse): 4B
+var y_vals_east_buf = @zeros([max_local_nnz_rows]f32);    // rx/tx vals on east-train during reduction (sparse): 4B
+var y_rows_east_buf = @zeros([max_local_nnz_rows]u16);    // rx/tx rows on east-train during reduction (sparse): 4B
+
+
+// need to keep track of both, the size to use, and the start offset into the buffers.
+// var rx_east_buf_len = @zeros([2, 1]u16);
+var rx_east_buf0_len = @zeros([1]u16);
+var rx_east_buf1_len = @zeros([1]u16);
+// var tx_west_buf_len = @zeros([2, 1]u16);
+var tx_west_buf0_len = @zeros([1]u16);
+var tx_west_buf1_len = @zeros([1]u16);
+var tx_west_buf_off = @zeros([2]i16);
+
+var rx_west_buf0_len = @zeros([1]u16);
+var rx_west_buf1_len = @zeros([1]u16);
+var tx_east_buf0_len = @zeros([1]u16);
+var tx_east_buf1_len = @zeros([1]u16);
+var tx_east_buf_off = @zeros([2]i16);
+
+
+// NOTE: fabin fabout DSDs should be comptime consts for async!!
+// This means we cannot use variable lengths transfers,
+// which means that the functions set_dsd_length, set_dsd_addr, increment_dsd_offset, etc are all useless here.
+
+//-------------- allocation DSR explicitly for fabin/fabout
+// src1: 1, 2, 3, 4, 6, 7
+// dest: 1, 2, 3, 4, 5, 6
+// RX_NORTH_Q --> rx_north_dsd fabin (queue 4)
+const rx_north_dsr = @get_dsr(dsr_src1, src1_dsr_ids[0]);
+// RX_SOUTH_Q --> rx_south_dsd fabin (queue 1)
+const rx_south_dsr = @get_dsr(dsr_src1, src1_dsr_ids[1]);
+// RX_WEST_Q --> rx_west_dsd fabin (queue 6)
+const rx_west_dsr = @get_dsr(dsr_src1, src1_dsr_ids[2]);
+// RX_EAST_Q --> rx_east_dsd fabin (queue 7)
+const rx_east_dsr = @get_dsr(dsr_src1, src1_dsr_ids[3]);
+
+const mem1d_rx_east_dsr = @get_dsr(dsr_dest, dest_dsr_ids[0]);
+const mem1d_rx_west_dsr = @get_dsr(dsr_dest, dest_dsr_ids[1]);
+const mem1d_rx_south_dsr = @get_dsr(dsr_dest, dest_dsr_ids[2]);
+const mem1d_rx_north_dsr = @get_dsr(dsr_dest, dest_dsr_ids[3]);
+
+// TX_NORTH_Q --> tx_north_dsd fabout (queue 2)
+//                tx_north_ctrl_adv_dsd
+//                tx_north_ctrl_rst_dsd
+const tx_north_dsr = @get_dsr(dsr_dest, dest_dsr_ids[4]);
+// TX_SOUTH_Q --> tx_south_dsd fabout (queue 3)
+//                tx_south_ctrl_adv_dsd
+//                tx_south_ctrl_rst_dsd
+const tx_south_dsr = @get_dsr(dsr_dest, dest_dsr_ids[5]);
+// TX_WEST_Q --> tx_west_dsd fabout (queue 2
+const tx_west_dsr = @get_dsr(dsr_dest, dest_dsr_ids[4]);
+// TX_EAST_Q --> tx_east_dsd fabout (queue 3)
+const tx_east_dsr = @get_dsr(dsr_dest, dest_dsr_ids[5]);
+
+// idea: TX_SOUTH_Q and TX_EAST_Q use the same output queue 3
+// so these two operations must be nonoverlapping, we can use
+// the same DSR for mem1d.
+//    TX_SOUTH_Q used in tx_south_task()
+//     TX_EAST_Q used in tx_east_task()
+//
+// the same holds for TX_NORTH_Q and TX_WEST_Q
+//    TX_NORTH_Q used in tx_north_task()
+//     TX_WEST_Q used in tx_west_task()
+
+const mem1d_south_dsr = @get_dsr(dsr_src1, src1_dsr_ids[4]);
+const mem1d_east_dsr = @get_dsr(dsr_src1, src1_dsr_ids[4]);
+
+const mem1d_north_dsr = @get_dsr(dsr_src1, src1_dsr_ids[5]);
+const mem1d_west_dsr = @get_dsr(dsr_src1, src1_dsr_ids[5]);
+
+//--------------
+
+// fab DSDs
+
+// 1. compute phase: north and south trains for input vector
+const rx_north_dsd = @get_dsd(fabin_dsd, .{
+    .extent = local_vec_sz,                 // fp32 => 1 per wavelet
+    .fabric_color = south_train,
+    .input_queue = @get_input_queue(RX_NORTH_Q),
+});
+const rx_south_dsd = @get_dsd(fabin_dsd, .{
+    .extent = local_vec_sz,
+    .fabric_color = north_train,
+    .input_queue = @get_input_queue(RX_SOUTH_Q),
+});
+const tx_north_dsd = @get_dsd(fabout_dsd, .{
+    .extent = local_vec_sz,                 // fp32 => 1 per wavelet
+    .fabric_color = north_train,
+    .output_queue = @get_output_queue(TX_NORTH_Q),
+});
+const tx_south_dsd = @get_dsd(fabout_dsd, .{
+    .extent = local_vec_sz,
+    .fabric_color = south_train,
+    .output_queue = @get_output_queue(TX_SOUTH_Q),
+});
+const tx_north_ctrl_adv_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 2,    // two switch wavelets
+    .control = true,
+    .fabric_color = north_train,
+    .output_queue = @get_output_queue(TX_NORTH_Q),
+});
+const tx_south_ctrl_adv_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 2,    // two switch wavelets
+    .control = true,
+    .fabric_color = south_train,
+    .output_queue = @get_output_queue(TX_SOUTH_Q),
+});
+const tx_north_ctrl_rst_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,    // two switch wavelets
+    .control = true,
+    .fabric_color = north_train,
+    .output_queue = @get_output_queue(TX_NORTH_Q),
+});
+const tx_south_ctrl_rst_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,    // two switch wavelets
+    .control = true,
+    .fabric_color = south_train,
+    .output_queue = @get_output_queue(TX_SOUTH_Q),
+});
+
+// 2. reduce phase: west and east trains for partial output vectors (sparse: vals + rows)
+const tx_west_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = tx_west_train,
+    .output_queue = @get_output_queue(TX_WEST_Q),
+});
+
+const tx_east_dsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = tx_east_train,
+    .output_queue = @get_output_queue(TX_EAST_Q),
+});
+
+// fabin DSDs
+
+// 2. reduce phase: west and east trains for partial output vectors (sparse: vals + rows)
+const rx_west_dsd = @get_dsd(fabin_dsd, .{
+    .extent = 1,
+    .fabric_color = rx_east_train,      // east-train, rx from west
+    .input_queue = @get_input_queue(RX_WEST_Q),
+});
+const rx_east_dsd = @get_dsd(fabin_dsd, .{
+    .extent = 1,
+    .fabric_color = rx_west_train,      // west-train, rx from east
+    .input_queue = @get_input_queue(RX_EAST_Q),
+});
+
+// input vector buf mem DSDs for north and south trains
+// local x segment (used for local compute + tx)
+// NOTE: this array should not be updated
+var x_tx_buf_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{local_vec_sz} -> dummy_f32[i],
+});
+// incoming x segments from north and south (double buffers)
+const north_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{local_vec_sz} -> x_north_buf0[i],
+});
+const north_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{local_vec_sz} -> x_north_buf1[i],
+});
+const south_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{local_vec_sz} -> x_south_buf0[i],
+});
+const south_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{local_vec_sz} -> x_south_buf1[i],
+});
+
+// reduction trains
+// partial output vector buf mem DSDs
+
+// west train
+
+// rx size of west train coach (from east)
+const y_rx_east_buf0_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> rx_east_buf0_len[i],
+});
+const y_rx_east_buf1_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> rx_east_buf1_len[i],
+});
+
+// tx size of west train coach
+const y_tx_west_buf0_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> tx_west_buf0_len[i],
+});
+const y_tx_west_buf1_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> tx_west_buf1_len[i],
+});
+
+// dsd for init y bufs (this array should not be modified)
+const y_rows_init_buf_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_rows_init_buf[i],
+});
+
+// west train partial output buffers: reuse the north buffers for double buffering
+const y_rows_west_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_rows_west_buf[i],
+});
+const y_vals_west_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_vals_west_buf[i],
+});
+const y_rows_west_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_rows_north_buf[i],
+});
+const y_vals_west_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_vals_north_buf[i],
+});
+
+// east train
+
+// rx size of east train coach (from west)
+const y_rx_west_buf0_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> rx_west_buf0_len[i],
+});
+const y_rx_west_buf1_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> rx_west_buf1_len[i],
+});
+
+// tx size of east train coach
+const y_tx_east_buf0_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> tx_east_buf0_len[i],
+});
+const y_tx_east_buf1_len_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> tx_east_buf1_len[i],
+});
+
+// east train partial output buffers: reuse the south buffers for double buffering
+const y_rows_east_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_rows_east_buf[i],
+});
+const y_vals_east_buf0_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_vals_east_buf[i],
+});
+const y_rows_east_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_rows_south_buf[i],
+});
+const y_vals_east_buf1_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{max_local_nnz_rows} -> y_vals_south_buf[i],
+});
+
+
+// misc vars
+
+// status of each rx, tx and train
+var is_rx_north_done: bool = false;
+var is_tx_north_done: bool = false;
+var is_rx_south_done: bool = false;
+var is_tx_south_done: bool = false;
+var is_compute_north_done: bool = false;
+var is_compute_south_done: bool = false;
+var is_local_compute_done: bool = false;
+var is_compute_north_started: bool = false;
+var is_compute_south_started: bool = false;
+var is_north_train_running: bool = false;
+var is_south_train_running: bool = false;
+
+// NORTH TRAIN: buffer and status
+var curr_rx_south_buf: u16 = 0;         // buffer to use for rx (current rx)
+var curr_rx_south_compute_buf: u16 = 0; // buffer to use for compute (current compute)
+// free = true => rx can be performed
+var rx_south_buf_free = [2]bool { false, false };
+// ready = true => rx done, compute can be performed
+var rx_south_buf_ready = [2]bool { false, false };
+
+// SOUTH TRAIN: buffer and status
+var curr_rx_north_buf: u16 = 0;
+var curr_rx_north_compute_buf: u16 = 0;
+// free = true => rx can be performed
+var rx_north_buf_free = [2]bool { false, false };
+// ready = true => rx done, compute can be performed
+var rx_north_buf_ready = [2]bool { false, false };
+
+// tx task state
+var tx_north_task_state: u16 = 0;
+var tx_south_task_state: u16 = 0;
+
+// west-east trains
+var is_west_train_running: bool = false;
+var is_east_train_running: bool = false;
+var is_rx_east_done: bool = false;
+var is_rx_west_done: bool = false;
+var is_tx_west_done: bool = false;
+var is_tx_east_done: bool = false;
+
+// whether rx or tx is active (i.e. corresponding uthread may be active)
+var is_tx_west_active: bool = false;
+var is_tx_east_active: bool = false;
+var is_rx_east_active: bool = false;
+var is_rx_west_active: bool = false;
+
+// which task to execute for tx/rx (0: data length, 1: row indices, 2: vals, 3: done)
+var tx_west_task_state: u16 = 0;
+var tx_east_task_state: u16 = 0;
+var rx_west_task_state: u16 = 0;
+var rx_east_task_state: u16 = 0;
+
+// the current buffer for west train
+var curr_tx_west_buf: u16 = 0;  // should start with 0
+var curr_rx_east_buf: u16 = 1;  // should start with 1
+var tx_west_buf_ready = [2]bool { false, false };   // if the bufs are ready for tx
+var rx_east_buf_avail = [2]bool { false, false };   // if the bufs are avail for rx
+
+// the current buffer for east train
+var curr_tx_east_buf: u16 = 0;  // should start with 0
+var curr_rx_west_buf: u16 = 1;  // should start with 1
+var tx_east_buf_ready = [2]bool { false, false };   // if the bufs are ready for tx
+var rx_west_buf_avail = [2]bool { false, false };   // if the bufs are avail for rx
+
+// north train counts
+var tx_north_count: u16 = 0;
+var rx_south_count: u16 = 0;
+var compute_north_count: u16 = 0;
+
+// south train counts
+var tx_south_count: u16 = 0;
+var rx_north_count: u16 = 0;
+var compute_south_count: u16 = 0;
+
+// west train counts
+var tx_west_count: u16 = 0;
+var rx_east_count: u16 = 0;
+
+// east train counts
+var tx_east_count: u16 = 0;
+var rx_west_count: u16 = 0;
+
+// initialize the x indices for current local chunks of x vector
+var north_train_x_low_idx: u16 = 0;
+var north_train_x_high_idx: u16 = 0;
+var south_train_x_low_idx: u16 = 0;
+var south_train_x_high_idx: u16 = 0;
+
+// index into the mat col array for the next segment of x to process
+var north_train_start_idx: u16 = 0;
+var south_train_start_idx: u16 = 0;
+
+// calculate the local low and high row index values in dense output for this PE
+var y_local_low: u16 = 0;
+var y_local_high: u16 = 0;
+
+var iter_counter: i16 = 0;
+
+// WARNING: iter_count is set by RPC
+var iter_count: i16;
+
+
+// switch related:
+
+const SWITCH_NOP = 0;   // nop
+const SWITCH_ADV = 1;   // advance
+const SWITCH_RST = 2;   // reset
+const SWITCH_TRD = 3;   // teardown
+
+// two advance commands to switch both rx and tx
+var ctrl_adv = @constants([2]u32, switch_wavelet(advance_switch_cmd()));
+const ctrl_adv_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{2} -> ctrl_adv[i]
+});
+// reset command
+var ctrl_rst = @constants([1]u32, switch_wavelet(reset_switch_cmd()));
+const ctrl_rst_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{1} -> ctrl_rst[i]
+});
+
+
+// construct control wavelet using command list
+fn switch_wavelet(cmds: [8]u16) u32 {
+    const noce = true;
+    const null_color = 31;
+
+    var ctrl_wavelet: u32 = 0;
+    ctrl_wavelet |= (null_color & 0x1f) << 16;
+
+    var curr_bit_pos: u16 = 22;
+    var i: u16 = 0;
+    while (i < 8): (i += 1) {
+        ctrl_wavelet |= @as(u32, cmds[i] & 0x3) << curr_bit_pos;
+        curr_bit_pos = (curr_bit_pos + 2) % 30;
+        ctrl_wavelet |= @as(u32, noce) << curr_bit_pos;
+        curr_bit_pos = curr_bit_pos + 1;
+    }
+    return ctrl_wavelet;
+}
+
+// command to reset current PE's switch to steady state
+fn advance_switch_cmd() [8]u16 {
+    var cmds = @constants([8]u16, SWITCH_NOP);
+    cmds[0] = SWITCH_ADV;
+    return cmds;
+}
+
+// command to reset current PE's switch to steady state
+fn reset_switch_cmd() [8]u16 {
+    var cmds = @constants([8]u16, SWITCH_NOP);
+    cmds[0] = SWITCH_RST;
+    return cmds;
+}
+
+
+// perform local compute using buffer for input x-vec (north)
+fn compute_north_fn(y_vals_buf: *[max_local_nnz_rows]f32,
+                    y_rows_buf: *[max_local_nnz_rows]u16,
+                    x_buf: *[local_vec_sz]f32,
+                    x_low_idx: u16,
+                    x_high_idx: u16) void {
+    // mat_bufs are stationary, y_bufs (sparse) are stationary, x_buf is shifting
+    // 1. locate local col idx >= xlow in mat_col_idx
+    // 2. until local col idx < xhigh, compute into local y_vals_buf
+    var i: u16 = north_train_start_idx;
+    // start_idx is initialized to `local_nnz_cols`, and goes in reverse
+    while (i >= 0 and (mat_col_idx_buf.*)[i] >= x_low_idx and (mat_col_idx_buf.*)[i] < x_high_idx) : (i -= 1) {
+        var local_col_idx = (mat_col_idx_buf.*)[i]; // local col idx
+        var local_col_len = (mat_col_len_buf.*)[i]; // num nz per corresponding col
+        var local_col_loc = (mat_col_loc_buf.*)[i]; // loc into mat_vals_bufs
+        var x_val = (x_buf.*)[local_col_idx - x_low_idx];
+        var j: u16 = 0;
+        while (j < local_col_len and local_col_loc + j < (local_nnz.*)[0]) : (j += 1) {
+            var y_idx = (mat_rows_buf.*)[local_col_loc + j];    // index into y_vals
+            (y_vals_buf.*)[y_idx] += x_val * (mat_vals_buf.*)[local_col_loc + j];
+            // NOTE: y_rows is constructed in preprocessing
+        }
+    }
+    north_train_start_idx = i;    // store it for next call of the same train (note: north and south maintain separate states)
+} // compute_north_fn()
+
+// perform local compute using buffer for input x-vec (south)
+fn compute_south_fn(y_vals_buf: *[max_local_nnz_rows]f32,
+                    y_rows_buf: *[max_local_nnz_rows]u16,
+                    x_buf: *[local_vec_sz]f32,
+                    x_low_idx: u16,
+                    x_high_idx: u16) void {
+    // mat_bufs are stationary, y_bufs (sparse) are stationary, x_buf is shifting
+    // 1. locate local col idx >= xlow in mat_col_idx
+    // 2. until local col idx < xhigh, compute into local y_vals_buf
+    var i: u16 = south_train_start_idx;
+    // it is guaranteed that mat_col_idx_buf[i] >= x_low_idx
+    while (i < (local_nnz_cols.*)[0] and (mat_col_idx_buf.*)[i] < x_high_idx) : (i += 1) {
+        var local_col_idx = (mat_col_idx_buf.*)[i]; // local col idx
+        var local_col_len = (mat_col_len_buf.*)[i]; // num nz per corresponding col
+        var local_col_loc = (mat_col_loc_buf.*)[i]; // loc into mat_vals_bufs
+        var x_val = (x_buf.*)[local_col_idx - x_low_idx];
+        var j: u16 = 0;
+        while (j < local_col_len and local_col_loc + j < (local_nnz.*)[0]) : (j += 1) {
+            var y_idx = (mat_rows_buf.*)[local_col_loc + j];    // index into y_vals
+            (y_vals_buf.*)[y_idx] += x_val * (mat_vals_buf.*)[local_col_loc + j];
+            // NOTE: y_rows is constructed in preprocessing
+        }
+    }
+    south_train_start_idx = i;    // store it for next call of the same train (note: north and south maintain separate states)
+} // compute_south_fn()
+
+// if something to do after reduction is finished, put it here.
+fn post_processing() void {
+    // reduce is done. record the time.
+    timestamp.get_timestamp(&tsc_reduce_end_buffer);
+
+    // count this iter
+    iter_counter -= 1;
+    if (iter_counter > 0) {
+        // run it again
+        // NOTE: With multiple iterations, the tsc_reduce_start and tsc_reduce_end will only
+        // contain the last iteration's timestamps.
+        @activate(init);
+    } else {
+
+        // spmv is done, continue next command
+        //sys_mod.unblock_cmd_stream();
+        f_callback();
+    } // if iter_counter > 0
+}
+
+fn rx_north_done() void {
+    is_rx_north_done = true;
+    // start the tx of local x segment and
+    // perform local compute (if not already done by the other train.)
+    @activate(tx_south);
+    @activate(compute_local);
+}
+
+fn rx_south_done() void {
+    is_rx_south_done = true;
+    // start the tx of local x segment and
+    // perform local compute (if not already done by the other train.)
+    @activate(tx_north);
+    @activate(compute_local);
+}
+
+fn tx_north_done() void {
+    if (!is_tx_north_done) {
+        is_tx_north_done = true;
+        // reset the switch for any subsequent spmv operations to work
+        if (is_first_row or is_last_row) {
+            // first and last rows do not need to switch
+            @activate(tx_north);
+        } else {
+            @load_to_dsr(tx_north_dsr, tx_north_ctrl_rst_dsd, .{ .async = true, .activate = tx_north_task });
+            @load_to_dsr(mem1d_north_dsr, ctrl_rst_dsd);
+            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
+            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;  
+        }
+    } else {
+        // tx is started only after rx is done
+        if (is_compute_north_done) {
+            is_north_train_running = false;
+            compute_done();
+        }
+    }
+}
+
+fn tx_south_done() void {
+    if (!is_tx_south_done) {
+        is_tx_south_done = true;
+        // reset the switch for any subsequent spmv operations to work
+        if (is_last_row or is_first_row) {
+            // last and first rows do not need to switch
+            @activate(tx_south);
+        } else {
+            @load_to_dsr(tx_south_dsr, tx_south_ctrl_rst_dsd, .{ .async = true, .activate = tx_south_task });
+            @load_to_dsr(mem1d_south_dsr, ctrl_rst_dsd);
+            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
+            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+        }
+    } else {
+        // tx is started only after rx is done
+        if (is_compute_south_done) {
+            is_south_train_running = false;
+            compute_done(); 
+       }
+   }
+}
+
+// when a train ends, this is activated
+// check if both trains have completely passed, then activate reduction process
+fn compute_done() void {
+    if (!is_north_train_running and !is_south_train_running and is_local_compute_done) {
+        start_reduce();
+    }
+}
+
+fn start_reduce() void {
+    // Record the value of the timestamp counter
+    timestamp.get_timestamp(&tsc_reduce_start_buffer);
+
+    // construct west and east buffers using the north and south buffers
+    // this assumes the data in north and south buffers are sorted w.r.t rows
+    var west_idx: u16 = 0;
+    var east_idx: u16 = 0;
+    var north_idx: u16 = 0;
+    var south_idx: u16 = 0;
+    var curr_row: u16 = 0;
+    var curr_val: f32 = 0.0;
+    while (north_idx < (local_nnz_rows.*)[0] and south_idx < (local_nnz_rows.*)[0]) {
+        curr_row = y_rows_north_buf[north_idx];
+        if (curr_row >= y_pad_start_row_idx) {
+            // if curr_row is a padding row, we can break because
+            // all subsequent row indices will be higher
+            break;
+        }
+        curr_val = y_vals_north_buf[north_idx] + y_vals_south_buf[south_idx];
+        north_idx += 1;
+        south_idx += 1;
+        // now that we have the current reduced data, put it in its right place
+        // TODO: Not necessary to compare every time since the row indices are sorted.
+        if (curr_row < y_local_low) {
+            // this goes to west
+            y_vals_west_buf[west_idx] = curr_val;
+            y_rows_west_buf[west_idx] = curr_row;
+            west_idx += 1;
+        } else if (curr_row >= y_local_high) {
+            // this goes to east
+            y_vals_east_buf[east_idx] = curr_val;
+            y_rows_east_buf[east_idx] = curr_row;
+            east_idx += 1;
+        } else {
+            // this is local data (dense)
+            (y_local_buf.*)[curr_row - y_local_low] += curr_val;
+        }   // if-else
+    }   // while
+
+    // reverse the west data so that scanning can be avoided in subsequent PEs to locate local data.
+    // with rows sorted reverse, the local data for a PE will always be at the beginning of the valid data (with offset.)
+    // use buf1 for this. Hence, west train will start tx from buf1, unlike east train.
+    // note: padding is not sent, so no need to check for it in rx task
+    var i: u16 = 0;
+    while (i < west_idx) : (i += 1) {
+        y_vals_north_buf[i] = y_vals_west_buf[west_idx - 1 - i];
+        y_rows_north_buf[i] = y_rows_west_buf[west_idx - 1 - i];
+    }
+
+    // buf0: west and east buffers
+    // buf1: north and south buffers (reuse)
+
+    // store the tx sizes for east and west trains, and start offsets (init 0)
+    // tx starts with buf0 for east train and buf1 for west train
+    tx_east_buf0_len[0] = east_idx;  // valid size
+    tx_east_buf_off[0] = 0;         // start offset
+    tx_west_buf1_len[0] = west_idx;  // valid size
+    tx_west_buf_off[1] = 0;         // start offset
+
+    // NOTE: following flags assume everything is initialized to false
+    // west train: tx west from buf1, rx east into buf0
+    // corner case: first col does not need to tx west, so both available for rx east
+    curr_tx_west_buf = 1;
+    curr_rx_east_buf = 0;
+    rx_east_buf_avail[curr_rx_east_buf] = true;
+    tx_west_buf_ready[curr_tx_west_buf] = true;
+    if (is_first_col) {
+        // edge case: since there is no tx west, buf is also avail for rx
+        rx_east_buf_avail[curr_tx_west_buf] = true;
+    }
+
+    // east train: tx east, rx west
+    // last col does not need to tx east, so both available for rx west
+    curr_tx_east_buf = 0;
+    curr_rx_west_buf = 1;
+    rx_west_buf_avail[curr_rx_west_buf] = true;
+    tx_east_buf_ready[curr_tx_east_buf] = true;
+    if (is_last_col) {
+        // edge case: since there is no tx east, buf is also avail for rx
+        rx_west_buf_avail[curr_tx_east_buf] = true;
+    }
+
+    // // DEBUGGING...
+    // post_processing();
+
+    // all data for a particular train is now uni-directional
+    // (i.e. for west-bound train, a PE will only receive data for local or PEs to west, never east)
+    // start west-bound and east-bound trains
+    // meanwhile the north-south set of buffers are available to rx the data
+    is_west_train_running = true;
+    @activate(tx_west);
+    @activate(rx_east);
+    is_east_train_running = true;
+    @activate(tx_east);
+    @activate(rx_west);
+}
+
+fn reduce_done() void {
+    if (!is_west_train_running and !is_east_train_running) {
+        post_processing();
+    }
+}
+
+// west-bound train local reduction
+fn reduce_local_west() void {
+    // NOTE: vals, rows are in reverse order to avoid scans to locate local data
+    // all local data will be at the beginning of the buffer's valid data segment
+    // west-train is unidirectional, nothing goes east from here
+    var y_rows_buf: *[max_local_nnz_rows]u16 = &y_rows_west_buf;    // need to initialize to something, actual set later
+    var y_vals_buf: *[max_local_nnz_rows]f32 = &y_vals_west_buf;
+    var length: u16 = 0;
+    if (curr_rx_east_buf == 0) {    // buf0 uses "west"
+        length = rx_east_buf0_len[0];
+        y_rows_buf = &y_rows_west_buf;
+        y_vals_buf = &y_vals_west_buf;
+    } else {                        // buf1 uses "north"
+        length = rx_east_buf1_len[0];
+        y_rows_buf = &y_rows_north_buf;
+        y_vals_buf = &y_vals_north_buf;
+    }
+    var i: u16 = 0;
+    while (i < length and
+            i < max_local_nnz_rows and
+            (y_rows_buf.*)[i] >= y_local_low) : (i += 1) {
+        // skip if this element is padding
+        // note: no need to check for padding as it is not sent in variable sized transfers
+        // if ((y_rows_buf.*)[i] < y_pad_start_row_idx) {
+            // reduce into local output dense vector
+            (y_local_buf.*)[(y_rows_buf.*)[i] - y_local_low] += (y_vals_buf.*)[i];
+        // }
+    }
+    // now we have reached the index where y_rows_buf[i] < y_local_low, hence,
+    // the data [i:] needs to go on the west-train, make a note of that
+    if (curr_rx_east_buf == 0) {
+        tx_west_buf0_len[0] = length - i;
+    } else {
+        tx_west_buf1_len[0] = length - i;
+    }
+    tx_west_buf_off[curr_rx_east_buf] = @as(i16, i);     // offset for west train valid data
+}
+
+// east-bound train local reduction
+fn reduce_local_east() void {
+    // for east-train, local data (if any) starts at index 0
+    // east-train is unidirectional, nothing goes west from here
+    var y_rows_buf: *[max_local_nnz_rows]u16 = &y_rows_east_buf;    // need to initialize to something, actual set later
+    var y_vals_buf: *[max_local_nnz_rows]f32 = &y_vals_east_buf;
+    var length: u16 = 0;
+    if (curr_rx_west_buf == 0) {    // buf0 uses "east"
+        length = rx_west_buf0_len[0];
+        y_rows_buf = &y_rows_east_buf;
+        y_vals_buf = &y_vals_east_buf;
+    } else {    // buf1 uses "south"
+        length = rx_west_buf1_len[0];
+        y_rows_buf = &y_rows_south_buf;
+        y_vals_buf = &y_vals_south_buf;
+    }
+    var i: u16 = 0;
+    // reduce local data, lowest row index is >= y_local_low
+    while (i < length and
+            i < max_local_nnz_rows and
+            (y_rows_buf.*)[i] < y_local_high) : (i += 1) {
+            // note: padding is not sent in variable size transfers, no need to check
+            // (y_rows_buf.*)[i] < y_pad_start_row_idx) : (i += 1) {
+        (y_local_buf.*)[(y_rows_buf.*)[i] - y_local_low] += (y_vals_buf.*)[i];
+    }
+    // starting at index i, all remaining data needs to go further east
+    if (curr_rx_west_buf == 0) {
+        tx_east_buf0_len[0] = length - i;
+    } else {
+        tx_east_buf1_len[0] = length - i;
+    }
+    tx_east_buf_off[curr_rx_west_buf] = @as(i16, i);
+}
+
+
+fn rx_east_done() void {
+    is_rx_east_done = true;
+    if (is_tx_west_done) {
+        is_west_train_running = false;
+    }
+    reduce_done();
+}
+
+fn rx_west_done() void {
+    is_rx_west_done = true;
+    if (is_tx_east_done) {
+        is_east_train_running = false;
+    }
+    reduce_done();
+}
+
+fn tx_east_done() void {
+    is_tx_east_done = true;
+    if (is_rx_west_done) {
+        // both rx and tx are done. stop the train
+        is_east_train_running = false;
+    }
+    reduce_done();
+}
+
+fn tx_west_done() void {
+    is_tx_west_done = true;
+    if (is_rx_east_done) {
+        is_west_train_running = false;
+    }
+    reduce_done();
+}
+
+// tasks
+
+// rx tasks
+
+// SOUTH train
+task curr_rx_north_done_task() void {
+    // rx into curr rx buf is done, mark it ready for compute and activate compute and also next rx
+    rx_north_buf_ready[curr_rx_north_buf] = true;
+    // flip the rx buffer
+    curr_rx_north_buf = 1 - curr_rx_north_buf;
+
+    if (!is_compute_south_started) {
+        is_compute_south_started = true;
+        @activate(compute_south);   // need to ensure compute chain hasn't started yet
+    }
+    @activate(rx_north);        // guaranteed that rx is not running, so start next right away
+}
+
+// NORTH train
+task curr_rx_south_done_task() void {
+    // rx into curr rx buf is done, mark it ready for compute and activate compute and also next rx
+    rx_south_buf_ready[curr_rx_south_buf] = true;
+    // flip the rx buffer
+    curr_rx_south_buf = 1 - curr_rx_south_buf;
+
+    if (!is_compute_north_started) {
+        is_compute_north_started = true;
+        @activate(compute_north);   // need to ensure any previous compute is done first
+    }
+    @activate(rx_south);        // guaranteed that rx is not running, so start next right away
+}
+
+// this rx's from the south-bound train (coming from north)
+task rx_north_task() void {
+    if (rx_north_count == 0) {
+        // nothing more to rx
+        rx_north_done();
+        return;
+    }
+    // rx from north into south-bound buf
+    if (rx_north_buf_free[curr_rx_north_buf]) {
+        // lock the buffer
+        rx_north_buf_free[curr_rx_north_buf] = false;
+        rx_north_count -= 1;
+        @load_to_dsr(rx_north_dsr, rx_north_dsd, .{ .async = true, .activate = curr_rx_north_done_task } );
+        if (curr_rx_north_buf == 0) {
+            @load_to_dsr(mem1d_rx_north_dsr, south_buf0_dsd);
+            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true });
+        } else {
+            @load_to_dsr(mem1d_rx_north_dsr, south_buf1_dsd);
+            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true });
+        }
+    	// set queue to be higher priority than MT
+    	// input queue config for UT0
+        @bitcast(*u16, ce_inpq0_cfg).* |= UT_MED_PRI;
+    } else {
+        // wait until avail
+        @activate(rx_north);
+    }
+}
+
+// this rx's from the north-bound train (coming from south)
+task rx_south_task() void {
+    if (rx_south_count == 0) {
+        // nothing more to rx
+        rx_south_done();
+        return;
+    }
+    // rx south into north-bound buf: ensure not to overwrite the tx buffer, which is sent last, after all rx is done.
+    if (rx_south_buf_free[curr_rx_south_buf]) {
+        // lock the buffer
+        rx_south_buf_free[curr_rx_south_buf] = false;
+        rx_south_count -= 1;
+        @load_to_dsr(rx_south_dsr, rx_south_dsd, .{ .async = true, .activate = curr_rx_south_done_task });
+        if (curr_rx_south_buf == 0) {
+            @load_to_dsr(mem1d_rx_south_dsr, north_buf0_dsd);
+            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true });
+        } else {
+            @load_to_dsr(mem1d_rx_south_dsr, north_buf1_dsd);
+            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true });
+        }
+	    @bitcast(*u16, ce_inpq1_cfg).* |= UT_MED_PRI;
+    } else {
+        // wait until available
+        @activate(rx_south);
+    }
+}
+
+// rx for west-bound train from east
+task rx_east_task() void {
+    if (rx_east_count < 1) {
+        // nothing more to rx
+        rx_east_done();
+        return;
+    }
+    if (rx_east_task_state == 0) {
+        @assert(!is_rx_east_active);
+        @assert(rx_east_count > 0);
+        if (rx_east_buf_avail[curr_rx_east_buf]) {
+            rx_east_task_state = 1;
+            is_rx_east_active = true;
+            // segment 1: rx size
+            @load_to_dsr(rx_east_dsr, rx_east_dsd, .{ .async = true, .activate = rx_east_task });
+            if (curr_rx_east_buf == 0) {
+                @load_to_dsr(mem1d_rx_east_dsr, y_rx_east_buf0_len_dsd);
+                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            } else {
+                @load_to_dsr(mem1d_rx_east_dsr, y_rx_east_buf1_len_dsd);
+                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            }
+	        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
+        } else {
+            // buffer is not avail to rx next coach, try again
+            @activate(rx_east);
+        }
+    } else if (rx_east_task_state == 1) {
+        rx_east_task_state = 2;
+        // segment 2: rx rows data, terminated by sen
+        if (curr_rx_east_buf == 0) {
+            if (rx_east_buf0_len[0] == 0) {
+                @activate(rx_east);
+                return;
+            }
+            const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf0_len[0]);
+            @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
+            @load_to_dsr(mem1d_rx_east_dsr, y_rows_west_buf0_dsd);
+            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+        } else {
+            if (rx_east_buf1_len[0] == 0) {
+                @activate(rx_east);
+                return;
+            }
+            const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf1_len[0]);
+            @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
+            @load_to_dsr(mem1d_rx_east_dsr, y_rows_west_buf1_dsd);
+            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+        }
+        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
+    } else if (rx_east_task_state == 2) {
+        rx_east_task_state = 3;
+        // segment 3: rx values data, terminated by eos
+        if (curr_rx_east_buf == 0) {
+            if (rx_east_buf0_len[0] == 0) {
+                @activate(rx_east);
+                return;
+            }
+            const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf0_len[0]);
+            @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
+            @load_to_dsr(mem1d_rx_east_dsr, y_vals_west_buf0_dsd);
+            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+        } else {
+            if (rx_east_buf1_len[0] == 0) {
+                @activate(rx_east);
+                return;
+            }
+            const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf1_len[0]);
+            @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
+            @load_to_dsr(mem1d_rx_east_dsr, y_vals_west_buf1_dsd);
+            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+        }
+        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
+    } else if (rx_east_task_state == 3) {
+        rx_east_task_state = 0;     // reset state
+        // rx has completed
+        is_rx_east_active = false;
+        rx_east_count -= 1;
+        // current buf can now be used to perform local reduction
+        reduce_local_west();
+
+        // rx'd data has been used and is now ready for tx
+        tx_west_buf_ready[curr_rx_east_buf] = true;
+        // corner case: if this is first col, there is nothing to tx west,
+        // so rx east can immediately rx the next coach
+        if (is_first_col) {
+            rx_east_buf_avail[curr_rx_east_buf] = true;
+        } else {
+            rx_east_buf_avail[curr_rx_east_buf] = false;
+        }
+        // flip the curr rx buf
+        curr_rx_east_buf = 1 - curr_rx_east_buf;
+
+        // reduction is done, start next rx_east in case there's more (rx_east_count > 0)
+        @activate(rx_east);
+    }
+}
+
+
+// rx for east-bound train from west
+task rx_west_task() void {
+    if (rx_west_count < 1) {
+        // nothing more remains to rx
+        rx_west_done();
+        return;
+    }
+    if (rx_west_task_state == 0) {
+        @assert(!is_rx_west_active);
+        @assert(rx_west_count > 0);
+        if (rx_west_buf_avail[curr_rx_west_buf]) {
+            rx_west_task_state = 1;
+            is_rx_west_active = true;
+            // segment 1: rx size
+            @load_to_dsr(rx_west_dsr, rx_west_dsd, .{ .async = true, .activate = rx_west_task });
+            if (curr_rx_west_buf == 0) {
+                @load_to_dsr(mem1d_rx_west_dsr, y_rx_west_buf0_len_dsd);
+                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            } else {
+                @load_to_dsr(mem1d_rx_west_dsr, y_rx_west_buf1_len_dsd);
+                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            }
+            @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
+        } else {
+            // buffer is not avail for rx next coach, try again
+            @activate(rx_west);
+        }
+    } else if (rx_west_task_state == 1) {
+        rx_west_task_state = 2;
+        // segment 2: rx rows data, terminated by sen
+        if (curr_rx_west_buf == 0) {
+            if (rx_west_buf0_len[0] == 0) {
+                @activate(rx_west);
+                return;
+            }
+            const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf0_len[0]);
+            @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
+            @load_to_dsr(mem1d_rx_west_dsr, y_rows_east_buf0_dsd);
+            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+        } else {
+            if (rx_west_buf1_len[0] == 0) {
+                @activate(rx_west);
+                return;
+            }
+            const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf1_len[0]);
+            @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
+            @load_to_dsr(mem1d_rx_west_dsr, y_rows_east_buf1_dsd);
+            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+        }
+        @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
+    } else if (rx_west_task_state == 2) {
+        rx_west_task_state = 3;
+        // segment 3: rx values data, terminated by eos
+        if (curr_rx_west_buf == 0) {
+            if (rx_west_buf0_len[0] == 0) {
+                @activate(rx_west);
+                return;
+            }
+            const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf0_len[0]);
+            @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
+            @load_to_dsr(mem1d_rx_west_dsr, y_vals_east_buf0_dsd);
+            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+        } else {
+            if (rx_west_buf1_len[0] == 0) {
+                @activate(rx_west);
+                return;
+            }
+            const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf1_len[0]);
+            @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
+            @load_to_dsr(mem1d_rx_west_dsr, y_vals_east_buf1_dsd);
+            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+        }
+        @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
+    } else if (rx_west_task_state == 3) {
+        rx_west_task_state = 0;     // reset state
+        // rx has completed
+        is_rx_west_active = false;
+        rx_west_count -= 1;
+        // current buf can now be used to perform local reduction
+        reduce_local_east();
+
+        // rx'd data has been used and is now ready for tx
+        tx_east_buf_ready[curr_rx_west_buf] = true;
+        // corner case: if this is the last col, there is nothing to tx east,
+        // so rx west can immediately rx the next coach.
+        if (is_last_col) {
+            rx_west_buf_avail[curr_rx_west_buf] = true;
+        } else {
+            rx_west_buf_avail[curr_rx_west_buf] = false;
+        }
+        // flip the curr rx buf
+        curr_rx_west_buf = 1 - curr_rx_west_buf;
+
+        // activate next rx incase there's more (rx_west_count > 0)
+        @activate(rx_west);
+    }
+}
+
+
+// tx tasks
+
+// this is performed once and starts the north-bound train
+task tx_north_task() void {
+    if (tx_north_count == 0) {
+        // all tx has been completed
+        tx_north_done();
+        return;
+    }
+    // send local data from north buf 0 onto north-bound train,
+    if (tx_north_task_state == 0) {
+        // tx buf is always ready at init
+        tx_north_task_state = 1;
+        @load_to_dsr(tx_north_dsr, tx_north_dsd, .{ .async = true, .activate = tx_north_task });
+        @load_to_dsr(mem1d_north_dsr, x_tx_buf_dsd);
+        @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
+        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
+    } else if (tx_north_task_state == 1) {
+        // tx north uthread has finished, send out two advance commands for next PE
+        tx_north_task_state = 2;
+        if (is_first_row or is_second_row) {
+            // top two rows do not send out switch wavelets
+            @activate(tx_north);
+        } else {
+            @load_to_dsr(tx_north_dsr, tx_north_ctrl_adv_dsd, .{ .async = true, .activate = tx_north_task });
+            @load_to_dsr(mem1d_north_dsr, ctrl_adv_dsd);
+            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
+            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;  
+    	}
+    } else if (tx_north_task_state == 2) {
+        tx_north_task_state = 0;    // reset
+        // tx north uthread has finished
+        // 1. decrement count, 2. mark as not ready for tx, 3. mark as avail for rx
+        tx_north_count -= 1;
+        @activate(tx_north);
+    }
+}
+
+// this starts the south-bound train
+task tx_south_task() void {
+    if (tx_south_count == 0) {
+        // all tx has been completed
+        tx_south_done();
+        return;
+    }
+    // send local data from south buf 0 onto south-bound train,
+    if (tx_south_task_state == 0) {
+        // tx buf is always ready at init
+        tx_south_task_state = 1;
+        @load_to_dsr(tx_south_dsr, tx_south_dsd, .{ .async = true, .activate = tx_south_task });
+        @load_to_dsr(mem1d_south_dsr, x_tx_buf_dsd);
+        @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
+        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+    } else if (tx_south_task_state == 1) {
+        // tx south uthread has finished, send out reset command to put the switch into steady state
+        tx_south_task_state = 2;
+        if (is_last_row or is_second_last_row) {
+            // bottom two rows do not send out switch wavelets
+            @activate(tx_south);
+        } else {
+            @load_to_dsr(tx_south_dsr, tx_south_ctrl_adv_dsd, .{ .async = true, .activate = tx_south_task });
+            @load_to_dsr(mem1d_south_dsr, ctrl_adv_dsd);
+            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
+            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+        }
+    } else if (tx_south_task_state == 2) {
+        tx_south_task_state = 0;    // reset
+        // tx south uthread has finished
+        // 1. decrement count, 2. mark as not ready for tx, 3. mark as avail for rx
+        tx_south_count -= 1;
+        @activate(tx_south);
+    }
+}
+
+// west-bound train data tx
+task tx_west_task() void {
+    if (tx_west_count < 1) {
+        // all tx has been completed, nothing more remains
+        tx_west_done();
+        return;
+    }
+    if (tx_west_task_state == 0) {
+        @assert(!is_tx_west_active);
+        @assert(tx_west_count > 0);
+        // start the tx chain if buffer is ready for tx
+        if (tx_west_buf_ready[curr_tx_west_buf]) {
+            tx_west_task_state = 1;
+            is_tx_west_active = true;
+            // segment 1: send the valid size first
+            @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+            if (curr_tx_west_buf == 0) {
+                @load_to_dsr(mem1d_west_dsr, y_tx_west_buf0_len_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            } else {
+                @load_to_dsr(mem1d_west_dsr, y_tx_west_buf1_len_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            }
+            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
+        } else {
+            // curr tx west buf not ready for tx, try again
+            @activate(tx_west);
+        }
+    } else if (tx_west_task_state == 1) {
+        tx_west_task_state = 2;
+        // segment 2: set the base addr and valid data size to tx the y_rows data
+        // note: padding is not sent
+        if (curr_tx_west_buf == 0) {
+            if (tx_west_buf0_len[0] == 0) {
+                @activate(tx_west);
+                return;
+            }
+            if (tx_west_buf_off[0] == 0) {
+                const y_rows_west_dsd = @set_dsd_length(y_rows_west_buf0_dsd, tx_west_buf0_len[0]);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            } else {
+                const y_rows_west_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_west_buf0_dsd, tx_west_buf0_len[0]), tx_west_buf_off[0], u16);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            }
+        } else {
+            if (tx_west_buf1_len[0] == 0) {
+                @activate(tx_west);
+                return;
+            }
+            if (tx_west_buf_off[1] == 0) {
+                const y_rows_west_dsd = @set_dsd_length(y_rows_west_buf1_dsd, tx_west_buf1_len[0]);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            } else {
+                const y_rows_west_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_west_buf1_dsd, tx_west_buf1_len[0]), tx_west_buf_off[1], u16);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            }
+        }
+        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
+    } else if (tx_west_task_state == 2) {
+        tx_west_task_state = 4;
+        // segment 3: send vals data
+        if (curr_tx_west_buf == 0) {
+            if (tx_west_buf0_len[0] == 0) {
+                @activate(tx_west);
+                return;
+            }
+            if (tx_west_buf_off[0] == 0) {
+                const y_vals_west_dsd = @set_dsd_length(y_vals_west_buf0_dsd, tx_west_buf0_len[0]);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            } else {
+                const y_vals_west_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_west_buf0_dsd, tx_west_buf0_len[0]), tx_west_buf_off[0], f32);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            }
+        } else {
+            if (tx_west_buf1_len[0] == 0) {
+                @activate(tx_west);
+                return;
+            }
+            if (tx_west_buf_off[1] == 0) {
+                const y_vals_west_dsd = @set_dsd_length(y_vals_west_buf1_dsd, tx_west_buf1_len[0]);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            } else {
+                const y_vals_west_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_west_buf1_dsd, tx_west_buf1_len[0]), tx_west_buf_off[1], f32);
+                @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
+                @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+            }
+        }
+        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
+    } else if (tx_west_task_state == 4) {
+        tx_west_task_state = 0; // reset tx state
+        // current tx west has completed
+        is_tx_west_active = false;
+        tx_west_count -= 1;
+        // curr_tx_west_buf is now available for rx of next coach.
+        rx_east_buf_avail[curr_tx_west_buf] = true;
+        // while its not ready for tx
+        tx_west_buf_ready[curr_tx_west_buf] = false;
+        // corner case: if this is the last col, there is nothing to rx east
+        // in this case, the count will be 0 here.
+
+        // flip the curr tx west buf
+        curr_tx_west_buf = 1 - curr_tx_west_buf;
+    
+        // start next tx incase there is more (tx_west_count > 0)
+        @activate(tx_west);
+    }
+}
+
+// east-bound train data tx
+task tx_east_task() void {
+    if (tx_east_count < 1) {
+        // all tx has been completed
+        tx_east_done();
+        return;
+    }
+    if (tx_east_task_state == 0) {
+        @assert(!is_tx_east_active);
+        @assert(tx_east_count > 0);
+        // start the tx chain if buffer is ready for tx, and there is tx count remaining
+        if (tx_east_buf_ready[curr_tx_east_buf]) {
+            tx_east_task_state = 1;
+            is_tx_east_active = true;
+            // segment 1: send the valid size first
+            @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+            if (curr_tx_east_buf == 0) {
+                @load_to_dsr(mem1d_east_dsr, y_tx_east_buf0_len_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            } else {
+                @load_to_dsr(mem1d_east_dsr, y_tx_east_buf1_len_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            }
+            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+        } else {
+            // curr tx east buf is not ready, try again
+            @activate(tx_east);
+        }
+    } else if (tx_east_task_state == 1) {
+        tx_east_task_state = 2;
+        // segment 2: set the base addr and valid data size to tx the y_rows data
+        // note: padding is not sent, so no need to check for it in rx task
+        if (curr_tx_east_buf == 0) {
+            if (tx_east_buf0_len[0] == 0) {
+                @activate(tx_east);
+                return;
+            }
+            if (tx_east_buf_off[0] == 0) {
+                const y_rows_east_dsd = @set_dsd_length(y_rows_east_buf0_dsd, tx_east_buf0_len[0]);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            } else {
+                const y_rows_east_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_east_buf0_dsd, tx_east_buf0_len[0]), tx_east_buf_off[0], u16);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            }
+        } else {
+            if (tx_east_buf1_len[0] == 0) {
+                @activate(tx_east);
+                return;
+            }
+            if (tx_east_buf_off[1] == 0) {
+                const y_rows_east_dsd = @set_dsd_length(y_rows_east_buf1_dsd, tx_east_buf1_len[0]);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            } else {
+                const y_rows_east_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_east_buf1_dsd, tx_east_buf1_len[0]), tx_east_buf_off[1], u16);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            }
+        }
+        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+    } else if (tx_east_task_state == 2) {
+        tx_east_task_state = 4;
+        // segment 2: send vals data
+        if (curr_tx_east_buf == 0) {
+            if (tx_east_buf0_len[0] == 0) {
+                @activate(tx_east);
+                return;
+            }
+            if (tx_east_buf_off[0] == 0) {
+                const y_vals_east_dsd = @set_dsd_length(y_vals_east_buf0_dsd, tx_east_buf0_len[0]);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            } else {
+                const y_vals_east_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_east_buf0_dsd, tx_east_buf0_len[0]), tx_east_buf_off[0], f32);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            }
+        } else {
+            if (tx_east_buf1_len[0] == 0) {
+                @activate(tx_east);
+                return;
+            }
+            if (tx_east_buf_off[1] == 0) {
+                const y_vals_east_dsd = @set_dsd_length(y_vals_east_buf1_dsd, tx_east_buf1_len[0]);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            } else {
+                const y_vals_east_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_east_buf1_dsd, tx_east_buf1_len[0]), tx_east_buf_off[1], f32);
+                @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
+                @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+            }
+        }
+        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+    } else if (tx_east_task_state == 4) {
+        tx_east_task_state = 0; // reset tx state
+        // current tx east has completed
+        is_tx_east_active = false;
+        tx_east_count -= 1;
+        // curr_tx_east_buf is now available for rx of next coach.
+        rx_west_buf_avail[curr_tx_east_buf] = true;
+        // while the tx buffer us not ready
+        tx_east_buf_ready[curr_tx_east_buf] = false;
+        // corner case: if this is the first col, there is nothing to rx west
+        // in this case, the count will be 0 here.
+
+        // flip the curr tx east buf
+        curr_tx_east_buf = 1 - curr_tx_east_buf;
+    
+        // start next tx incase there is more (tx_east_count > 0)
+        @activate(tx_east);
+    }
+}
+
+// local compute tasks
+
+task compute_local_task() void {
+    if (is_local_compute_done) {
+        // if the other train did it, do not do again.
+        return;
+    }
+    is_local_compute_done = true;
+    var local_x_low_idx = prow_id * local_vec_sz;
+    var local_x_high_idx = local_x_low_idx + local_vec_sz;
+    if (is_rx_south_done) {     // north train has already ended, so can use its current index value
+        // giving preference to north buffer
+        // use the north train function
+        compute_north_fn(&y_vals_north_buf, &y_rows_north_buf,
+                            x_tx_buf,  // use local buffer
+                            local_x_low_idx, local_x_high_idx);
+    } else {                    // south train has already ended. so can use its current index value
+        // use the south train function
+        compute_south_fn(&y_vals_south_buf, &y_rows_south_buf,
+                            x_tx_buf,  // use local buffer
+                            local_x_low_idx, local_x_high_idx);
+    }
+    compute_done();
+} // compute_local_task()
+
+fn compute_north_done_fn() void {
+    // tx and local compute are already activated when rx finished
+    // this function will strictly be executed only after all rx are done.
+    is_compute_north_done = true;
+    // either tx done or compute done will be the last things to execute for phase1
+    if (is_rx_south_done and is_tx_north_done) {
+        is_north_train_running = false;
+        compute_done();
+    }
+}
+
+fn compute_south_done_fn() void {
+    // tx and local compute are already activated when rx finished
+    // this function will strictly be executed only after all rx are done.
+    is_compute_south_done = true;
+    // either tx done or compute done will be the last things to execute for phase1
+    if (is_rx_north_done and is_tx_south_done) {
+        is_south_train_running = false;
+        compute_done();
+    }
+}
+
+task compute_north_task() void {
+    if (compute_north_count == 0) {
+        compute_north_done_fn();
+        return;
+    }
+    if (rx_south_buf_ready[curr_rx_south_compute_buf]) {
+        // mark it as not ready as it is now being used
+        rx_south_buf_ready[curr_rx_south_compute_buf] = false;
+        // decrement compute count
+        compute_north_count -= 1;
+        // data ready, use north-bound buffer for compute
+        if (curr_rx_south_compute_buf == 0) {
+            compute_north_fn(&y_vals_north_buf, &y_rows_north_buf,
+                                &x_north_buf0,
+                                north_train_x_low_idx, north_train_x_high_idx);
+        } else {
+            compute_north_fn(&y_vals_north_buf, &y_rows_north_buf,
+                                &x_north_buf1,
+                                north_train_x_low_idx, north_train_x_high_idx);
+        }
+        // this starts with data from last row and moves up to first row
+        // hence decrement for the next segment
+        north_train_x_low_idx -= local_vec_sz;
+        north_train_x_high_idx -= local_vec_sz;
+        // data has been used, buffer is now free to rx next segment, unlock
+        rx_south_buf_free[curr_rx_south_compute_buf] = true;
+        // and flip to next buffer for compute
+        curr_rx_south_compute_buf = 1 - curr_rx_south_compute_buf;
+    }
+    // and start next compute
+    @activate(compute_north);
+} // compute_north_task()
+
+task compute_south_task() void {
+    if (compute_south_count == 0) {
+        compute_south_done_fn();
+        return;
+    }
+    if (rx_north_buf_ready[curr_rx_north_compute_buf]) {
+        rx_north_buf_ready[curr_rx_north_compute_buf] = false;
+        compute_south_count -= 1;
+        // rx is done use south-bound buffer for compute
+        if (curr_rx_north_compute_buf == 0) {
+            compute_south_fn(&y_vals_south_buf, &y_rows_south_buf,
+                                &x_south_buf0,
+                                south_train_x_low_idx, south_train_x_high_idx);
+        } else {
+            compute_south_fn(&y_vals_south_buf, &y_rows_south_buf,
+                                &x_south_buf1,
+                                south_train_x_low_idx, south_train_x_high_idx);
+        }
+        // this start with data from the first row and moved down to last row
+        // hence increment for the next chunk
+        south_train_x_low_idx += local_vec_sz;
+        south_train_x_high_idx += local_vec_sz;
+        // data has been used, buffer us now free to rx next segment, unlock
+        rx_north_buf_free[curr_rx_north_compute_buf] = true;
+        // and flip to next buffer as curr_rx_south_buf
+        curr_rx_north_compute_buf = 1 - curr_rx_north_compute_buf;
+    }    
+    // start next compute
+    @activate(compute_south);
+} // compute_north_task()
+
+
+
+fn is_less_than(aval: *[3]u16, bval: *[3]u16) bool {
+    if ((aval.*)[2] < (bval.*)[2]) {
+        return true;
+    } else if ((aval.*)[2] == (bval.*)[2]) {
+        if ((aval.*)[1] < (bval.*)[1]) {
+            return true;
+        } else if ((aval.*)[1] == (bval.*)[1]) {
+            if ((aval.*)[0] < (bval.*)[0]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn zero_out_flags_and_data() void {
+    // init all flags to false
+    is_rx_north_done = false;
+    is_tx_north_done = false;
+    is_rx_south_done = false;
+    is_tx_south_done = false;
+    is_compute_north_done = false;
+    is_compute_south_done = false;
+    is_local_compute_done = false;
+    is_compute_north_started = false;
+    is_compute_south_started = false;
+    is_north_train_running = false;
+    is_south_train_running = false;
+    rx_south_buf_free[0] = false;
+    rx_south_buf_free[1] = false;
+    rx_south_buf_ready[0] = false;
+    rx_south_buf_ready[1] = false;
+    rx_north_buf_free[0] = false;
+    rx_north_buf_free[1] = false;
+    rx_north_buf_ready[0] = false;
+    rx_north_buf_ready[1] = false;
+    is_west_train_running = false;
+    is_east_train_running = false;
+    is_rx_east_done = false;
+    is_rx_west_done = false;
+    is_tx_west_done = false;
+    is_tx_east_done = false;
+    is_tx_west_active = false;
+    is_tx_east_active = false;
+    is_rx_east_active = false;
+    is_rx_west_active = false;
+    tx_west_buf_ready[0] = false;
+    tx_west_buf_ready[1] = false;
+    rx_east_buf_avail[0] = false;
+    rx_east_buf_avail[1] = false;
+    tx_east_buf_ready[0] = false;
+    tx_east_buf_ready[1] = false;
+    rx_west_buf_avail[0] = false;
+    rx_west_buf_avail[1] = false;
+
+    // first copy data from the y_*_init_buf into the working buffer y_*_north_buf (y_*_west_buf1)
+    // called by init(), whole spmv is done, can reuse any DSR
+    @load_to_dsr(tx_south_dsr, y_rows_west_buf1_dsd);
+    @load_to_dsr(mem1d_south_dsr, y_rows_init_buf_dsd);
+    @mov16(tx_south_dsr, mem1d_south_dsr);
+
+    // zero out the local and north/south buffers for output vector
+    var i: u16 = 0;
+    while (i < local_out_vec_sz) : (i += 1) {
+        (y_local_buf.*)[i] = 0.0;
+    }
+    i = 0;
+    while (i < (local_nnz_rows.*)[0]) : (i += 1) {
+        y_vals_north_buf[i] = 0.0;
+        y_vals_south_buf[i] = 0.0;
+    }
+}
+
+task init_task() void {
+
+    zero_out_flags_and_data();
+
+    // each train starts with every PE tx'ing out its local data once.
+    // this is followed by rx'ing each segmenet and processing it.
+    // router will forward it to the outgoing direction
+
+    // north train counts
+    if (is_first_row) {
+        tx_north_count = 0;
+    } else {
+        tx_north_count = 1;
+    }
+    rx_south_count = prows - prow_id - 1;
+    compute_north_count = rx_south_count;   // should be equal
+    if (compute_north_count == 0) {
+        // if there is nothing to rx for compute, mark it as done
+        is_compute_north_done = true;
+    }
+
+    // south train counts
+    if (is_last_row) {
+        tx_south_count = 0;
+    } else {
+        tx_south_count = 1;
+    }
+    rx_north_count = prow_id;
+    compute_south_count = rx_north_count;   // should be equal
+    if (compute_south_count == 0) {
+        // if there is nothing to rx for compute, mark it as done
+        is_compute_south_done = true;
+    }
+
+    // west train counts
+    tx_west_count = (pcols - pcol_id) % pcols;
+    rx_east_count = pcols - pcol_id - 1;
+
+    // east train counts
+    tx_east_count = (pcol_id + 1) % pcols;
+    rx_west_count = pcol_id;
+
+    // calculate the local low and high row index values in dense output for this PE
+    // NOTE: these are indices into the fully padded output vector
+    y_local_low = local_out_vec_sz * pcol_id;          // incl
+    y_local_high = local_out_vec_sz * (pcol_id + 1);   // excl
+    // all row idx > y_pad_start_idx are padding, need to be left as 0
+
+    // first preprocess row indices:
+    // 1. extract local row indices from mat_rows,
+    // 2. sort them,
+    // 3. and then put them in y_rows,
+    // 4. while updating mat_rows to index into y_rows
+    // NOTE: This is now done outside of the kernel as a preprocessing step
+
+    // initialize the x indices to start from one end
+    // (north train starts with data from last row, south train start from first row)
+    north_train_x_low_idx = (prows - 1) * local_vec_sz;             // north train's start low index
+    north_train_x_high_idx = north_train_x_low_idx + local_vec_sz;  // north train's start high index
+    south_train_x_low_idx = 0;                                      // south train's start low index
+    south_train_x_high_idx = south_train_x_low_idx + local_vec_sz;  // south train's start high index
+
+    north_train_start_idx = (local_nnz_cols.*)[0] - 1;     // this will be in reverse (decreasing) order
+    south_train_start_idx = 0;                      // this will be in increasing order
+
+    // both rx buffers are initially available (north train, rx from south)
+    rx_south_buf_free[0] = true;
+    rx_south_buf_free[1] = true;
+    // neither is ready for compute yet
+    rx_south_buf_ready[0] = false;
+    rx_south_buf_ready[1] = false;
+    curr_rx_south_buf = 0;      // start with 0
+    curr_rx_south_compute_buf = 0; // buffer to use for compute (current compute)
+
+    // both rx buffers are initially available (south train, rx from north)
+    rx_north_buf_free[0] = true;
+    rx_north_buf_free[1] = true;
+    // neither is ready for compute yet
+    rx_north_buf_ready[0] = false;
+    rx_north_buf_ready[1] = false;
+    curr_rx_north_buf = 0;      // start with 0
+    curr_rx_north_compute_buf = 0; // buffer to use for compute (current compute)
+
+    // start the north-moving train
+    // starts with the last row PE sending out its data, followed by ctrl to switch router on PE above.
+    // All PEs receive the data in the same order: from prows - 1, prows - 2, prows - 3 ... until 1.
+    // Top two PEs do not need to send out any ctrl, and the first row PE never needs to switch.
+    
+    // debug: uncomment to disable north train
+    // rx_south_count = 0;
+    // tx_north_count = 0;
+    // is_compute_north_done = true;
+
+    is_north_train_running = true;
+    @activate(rx_south);
+
+    // start the south-moving train
+    
+    // debug: uncomment to disable south train
+    // rx_north_count = 0;
+    // tx_south_count = 0;
+    // is_compute_south_done = true;
+
+    is_south_train_running = true;
+    @activate(rx_north);
+}
+
+
+// compute y = A*x
+fn spmv(x : *[local_vec_sz]f32, y: *[local_out_vec_sz]f32) void {
+
+    // setup x and y
+    x_tx_buf = x;
+    y_local_buf = y;
+    // reset the base of the DSD
+    x_tx_buf_dsd = @set_dsd_base_addr(x_tx_buf_dsd, x);
+
+    // (px, py) = (pcol_id, prow_id) is decided at runtime
+    // spmv kernel does not have a task to initialize (px, py), so
+    // setup coordinate (px, py) for every spmv() call
+    pcol_id = get_x_coord();
+    prow_id = get_y_coord();
+
+    // start spmv once
+    // WARNING: if the user wants to measure the spmv couple of times,
+    // just replace "1" by "number of iterations".
+    iter_count = @as(i16, 1);
+    // set initial counter because init_task is called "iter_count" times
+    iter_counter = iter_count;
+    @activate(init);
+    // post_processing() is the last task of spmv, it triggers f_callback()
+    // when spmv is done
+}
+
+
+// comptime
+
+comptime {
+
+    // bind tasks
+    @bind_task(init_task, init);
+
+    @bind_task(rx_north_task, rx_north);
+    @bind_task(rx_south_task, rx_south);
+    @bind_task(tx_north_task, tx_north);
+    @bind_task(tx_south_task, tx_south);
+    @bind_task(compute_north_task, compute_north);
+    @bind_task(compute_south_task, compute_south);
+    @bind_task(compute_local_task, compute_local);
+    @bind_task(curr_rx_north_done_task, curr_rx_north_done);
+    @bind_task(curr_rx_south_done_task, curr_rx_south_done);
+
+    @bind_task(rx_west_task, rx_west);
+    @bind_task(rx_east_task, rx_east);
+    @bind_task(tx_west_task, tx_west);
+    @bind_task(tx_east_task, tx_east);
+
+    // block all colors since we will be rx/tx'ing through uthreads.
+    @block(north_train);
+    @block(south_train);
+    @block(rx_west_train);
+    @block(rx_east_train);
+    @block(tx_west_train);
+    @block(tx_east_train);
+
+} // comptime
+
+
+// binding a color to an input queue.
+// This is necessary when an explicit DSR binds to a fabin DSD because
+// the compiler no longer can generate the instruction to set up the
+// config register of input queue.
+comptime {
+    // color south_train maps to RX_NORTH_Q: u16 = 4;
+    // color north_train maps to RX_SOUTH_Q: u16 = 1;
+    // color rx_east_train maps to RX_WEST_Q: u16 = 6;
+    // color rx_west_train maps to RX_EAST_Q: u16 = 7;
+    @initialize_queue(@get_input_queue(RX_NORTH_Q), .{.color = south_train});
+    @initialize_queue(@get_input_queue(RX_SOUTH_Q), .{.color = north_train});
+    @initialize_queue(@get_input_queue(RX_WEST_Q), .{.color = rx_east_train});
+    @initialize_queue(@get_input_queue(RX_EAST_Q), .{.color = rx_west_train});
+}
+
+comptime {
+
+    const north_train_route = .{
+      .routes= .{
+        .rx = .{ SOUTH },
+        .tx = .{ RAMP, NORTH },
+        .pop_mode = .{ .pop_on_advance = true },
+      },
+      .switches=.{
+        .pos1 = .{ .tx = NORTH },   // first change tx to just north
+        .pos2 = .{ .rx = RAMP },    // then change rx from ramp
+        .pos3 = .{ .invalid = true },
+        .ring_mode = false,
+        .current_switch_pos = 0,
+       },
+    };
+
+    const north_train_route_first_row = .{  // no switching
+      .routes= .{
+        .rx = .{ SOUTH },
+        .tx = .{ RAMP },
+       },
+    };
+    const north_train_route_last_row = .{  // no switching
+      .routes= .{
+        .rx = .{ RAMP },
+        .tx = .{ NORTH },
+       },
+    };
+
+    const south_train_route = .{
+      .routes= .{
+        .rx = .{ NORTH },
+        .tx = .{ RAMP, SOUTH },
+        .pop_mode = .{ .pop_on_advance = true },
+       },
+      .switches=.{
+        .pos1 = .{ .tx = SOUTH },   // first change tx to just north
+        .pos2 = .{ .rx = RAMP },    // then change rx from ramp
+        .pos3 = .{ .invalid = true },
+        .ring_mode = false,
+        .current_switch_pos = 0,
+       },
+    };
+    const south_train_route_first_row = .{  // no switching
+      .routes= .{
+        .rx = .{ RAMP },
+        .tx = .{ SOUTH },
+       },
+    };
+
+    const south_train_route_last_row = .{   // no switching
+      .routes= .{
+        .rx = .{ NORTH },
+        .tx = .{ RAMP },
+       },
+    };
+
+    const west_train_in = .{ .routes= .{ .rx = .{ EAST }, .tx = .{ RAMP } } };
+    const west_train_out = .{ .routes= .{ .rx = .{ RAMP }, .tx = .{ WEST } } };
+    const east_train_in = .{ .routes= .{ .rx = .{ WEST }, .tx = .{ RAMP } } };
+    const east_train_out = .{ .routes= .{ .rx = .{ RAMP }, .tx = .{ EAST } } };
+
+    if (is_first_row) {
+        // first row, (prow_id == 0)
+        @set_local_color_config(north_train, north_train_route_first_row);
+        @set_local_color_config(south_train, south_train_route_first_row);
+    } else if (is_last_row) {
+        // last row, (prow_id == prows - 1)
+        @set_local_color_config(north_train, north_train_route_last_row);
+        @set_local_color_config(south_train, south_train_route_last_row);
+    } else {
+        // all middle rows
+        @set_local_color_config(north_train, north_train_route);
+        @set_local_color_config(south_train, south_train_route);
+    }
+
+    if (!is_last_col) {
+        // all but last col, (pcol_id < pcols - 1)
+        @set_local_color_config(rx_west_train, west_train_in);
+        @set_local_color_config(tx_east_train, east_train_out);
+    }
+    if (!is_first_col) {
+        // all but first col, (pcol_id > 0)
+        @set_local_color_config(rx_east_train, east_train_in);
+        @set_local_color_config(tx_west_train, west_train_out);
+    }
+}

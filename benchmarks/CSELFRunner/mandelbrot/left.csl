@@ -50,7 +50,7 @@ task send() void {
   }
 
   const out = @get_dsd(fabout_dsd,
-              .{.fabric_color = out_color, .extent = 3, .output_queue = 1 });
+              .{.fabric_color = out_color, .extent = 3, .output_queue = @get_output_queue(1) });
 
   const x: f32 = common.get_x(col, x_lo, x_hi, image_width);
   const y: f32 = common.get_y(row, y_lo, y_hi, image_height);

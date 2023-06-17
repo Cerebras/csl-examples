@@ -39,16 +39,17 @@ var row_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> row_buf[i] 
 
 // // Column in/out DSDs
 var col_in = @get_dsd(fabin_dsd, .{ .fabric_color = col_color, .extent = Nt, .input_queue = @get_input_queue(0) });
-var col_out = @get_dsd(fabout_dsd, .{ .fabric_color = col_color, .extent = Nt, .output_queue = 1 });
+var col_out = @get_dsd(fabout_dsd, .{ .fabric_color = col_color, .extent = Nt, .output_queue = @get_output_queue(1) });
 
 // // Row in/out DSDs
 const row_in = @get_dsd(fabin_dsd, .{ .fabric_color = row_color, .extent = Nt, .input_queue = @get_input_queue(2) });
-const row_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = Nt, .output_queue = 3 });
+const row_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = Nt, .output_queue = @get_output_queue(3) });
 
 // // Two wavelets of (ADV + NO_CE, NOP + NO_CE)
 const ctrl_buf = [2]u32 { (5 << 22) | (4 << 25), (5 << 22) | (4 << 25) };
 const ctrl_mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> ctrl_buf[i] });
-const row_ctrl_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = 2, .output_queue = 0, .control = true });
+const row_ctrl_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = 2,
+                                             .output_queue = @get_output_queue(0), .control = true });
 
 var P_left: u16;
 var ti: u16;

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+# pylint: disable=too-many-function-args
 
 """ test bandwidth between host and device
 
@@ -104,7 +104,7 @@ import random
 
 import numpy as np
 
-from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
 
 from bw_cmd_parser import parse_args
 

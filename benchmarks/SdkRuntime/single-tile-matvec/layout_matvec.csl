@@ -1,0 +1,42 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param width: u16;
+param height: u16;
+param tile_size: u16;
+param iters: u16;
+
+const memcpy = @import_module("<memcpy_multi/get_params>", .{
+  .width = width,
+  .height = height 
+});
+
+layout {
+  @set_rectangle(width, height); 
+
+  for (@range(u16, width)) |px| {
+    const memcpy_params = memcpy.get_params(px);
+    for (@range(u16, height)) |py| {
+      @set_tile_code(px, py, "pe_matvec.csl", .{ .memcpy_params = memcpy_params,
+        .nb = tile_size, .iters = iters}); 
+    }   
+  }
+
+  // export symbol names
+  @export_name("A", [*]f32, true);
+  @export_name("x", [*]f32, true);
+  @export_name("y", [*]f32, true);
+  @export_name("maxmin_time", [*]f32, true);
+  @export_name("compute", fn()void);
+}

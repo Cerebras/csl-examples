@@ -61,7 +61,7 @@ task process() void {
   }
 
   const out = @get_dsd(fabout_dsd,
-              .{.fabric_color = out_color, .extent = 3, .output_queue = 1 });
+              .{.fabric_color = out_color, .extent = 3, .output_queue = @get_output_queue(1) });
   @mov32(out, mem_dsd, .{ .async = true, .activate = recv });
 }
 

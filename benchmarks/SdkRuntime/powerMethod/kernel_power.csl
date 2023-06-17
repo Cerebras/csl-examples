@@ -1,0 +1,290 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param memcpyParams: comptime_struct;
+
+param reduceParams: comptime_struct;
+
+param LAUNCH: color;
+
+param stencilParams: comptime_struct;
+
+param MAX_ZDIM: i16; // size of vector x
+
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+
+param STATE: color;
+
+const timestamp = @import_module("<time>");
+
+const math_lib = @import_module("<math>");
+
+const blas_lib = @import_module("blas.csl");
+
+// input/output queue ID = 0 is reserved for memcpy module
+const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
+     .LAUNCH = LAUNCH,
+     .data_type = f32
+      }));
+
+// allreduce uses input queue/output queue 1
+const reduce_mod = @import_module( "allreduce/pe.csl", @concat_structs(reduceParams, .{
+     .f_callback = f_trigger_state_machine,
+     .queues = [1]u16{1},
+     .dest_dsr_ids = [1]u16{1},
+     .src0_dsr_ids = [1]u16{1},
+     .src1_dsr_ids = [1]u16{1}
+     }));
+
+// output queue cannot overlap input queues
+const stencil_mod = @import_module( "stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+     .f_callback = f_trigger_state_machine,
+     .input_queues = [4]u16{3, 4, 5, 6},
+     .output_queues = [1]u16{2},
+     .BLOCK_SIZE = BLOCK_SIZE,
+     .dest_dsr_ids = [2]u16{2,3},
+     .src0_dsr_ids = [1]u16{2},
+     .src1_dsr_ids = [2]u16{2,3}
+     }));
+
+
+// tsc_size_words = 3
+// starting time of H2D/D2H
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+// ending time of H2D/D2H
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+
+var x = @zeros([MAX_ZDIM]f32);
+var y = @zeros([MAX_ZDIM]f32);
+
+var dot = @zeros([1]f32);
+
+var nrm2 = @zeros([1]f32);
+var inv_nrm2 = @zeros([1]f32);
+var alpha: f32;
+var inv_alpha: f32;
+
+// stencil coefficients are organized as
+// {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+//
+// The formula is
+//    c_west * x[i-1][j][k] + c_east * x[i+1][j][k] +
+//    c_south * x[i][j-1][k] + c_north * x[i][j+1][k] +
+//    c_bottom * x[i][j][k-1] + c_top * x[i][j][k+1] +
+//    c_center * x[i][j][k]
+var stencil_coeff = @zeros([7]f32);
+
+// time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
+var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
+
+// reference clock inside allreduce module
+var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+
+var ptr_x: [*]f32 = &x;
+var ptr_y: [*]f32 = &y;
+var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
+var ptr_time_ref: [*]u16 = &time_ref_u16;
+
+// size of local tensor during the PCG
+var n: i16 = 0;
+var max_ite: i16 = 0;
+
+const STATE_SYNC: i16 = 0;
+const STATE_SPMV: i16 = 1;
+const STATE_NRM2: i16 = 2;
+const STATE_SCALE: i16 = 3;
+const STATE_CONV_CHECK: i16 = 4;
+const STATE_EXIT: i16 = 5;
+
+var k: i16 = 0;
+var cur_state: i16 = 0;
+var next_state: i16 = 0;
+
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+    timestamp.get_timestamp(&tscEndBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_memcpy_timestamps() void {
+
+    time_buf_u16[0] = tscStartBuffer[0];
+    time_buf_u16[1] = tscStartBuffer[1];
+    time_buf_u16[2] = tscStartBuffer[2];
+
+    time_buf_u16[3] = tscEndBuffer[0];
+    time_buf_u16[4] = tscEndBuffer[1];
+    time_buf_u16[5] = tscEndBuffer[2];
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_sync() void {
+    cur_state = STATE_SYNC;
+    @activate(STATE);
+}
+
+fn f_power(size:i16, max_ite_val: i16) void {
+    n = size;
+    max_ite = max_ite_val;
+
+    k = 0;
+    cur_state = STATE_CONV_CHECK;
+    @activate(STATE);
+}
+
+// stencil coefficients are organized as
+// {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+fn f_spmv() void {
+    stencil_mod.spmv(n, &stencil_coeff, &x, &y);
+}
+
+fn f_nrm2_y() void {
+    // nrm2 = |y|_2 locally
+    nrm2[0] = blas_lib.nrm2(n, &y);
+
+    // reduce(|y|_2)
+    reduce_mod.allreduce_nrm2(&nrm2);
+}
+
+
+// x = y / |y|_2
+fn f_scale_x_by_nrm2() void {
+    inv_nrm2[0] = math_lib.inv(nrm2[0]);
+
+    var row: i16 = 0;
+    while(row < n) : (row +=1) {
+        var yreg: f32 = y[row];
+        x[row] = yreg * inv_nrm2[0];
+    }
+
+    // last opeation, increment k
+    k = k + 1;
+
+    // must go back to state machine
+    f_trigger_state_machine();
+}
+
+
+fn f_trigger_state_machine() void {
+    cur_state = next_state; // go to next state
+    @activate(STATE);
+}
+
+// state machine of power method
+// it contains two operations
+// - sync operation of allreduce
+// - PCG algorithm
+//
+// The callback f_trigger_state_machine is provided for the
+// allreduce module and stencil module.
+//
+// The state transition of sync is
+// SYNC --> EXIT
+//
+// The state transition of PCG algorithm is
+// CONV_CHECK --> EXIT or SPMV --> NRM2 --> SCALE --> CONV_CHECK
+//
+task f_state() void {
+
+    if (STATE_SYNC == cur_state){
+        // sync all PEs by internal allreduce module
+        next_state = STATE_EXIT;
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+
+    }else if (STATE_CONV_CHECK == cur_state){
+        if (k < max_ite){
+            next_state = STATE_SPMV;
+        }else{
+            next_state = STATE_EXIT;
+        }
+        f_trigger_state_machine();
+
+    }else if (STATE_SPMV == cur_state){
+        next_state = STATE_NRM2;
+        // compute y = A*x
+        f_spmv();
+
+    }else if (STATE_NRM2 == cur_state){
+        next_state = STATE_SCALE;
+        // nrm(y)
+        f_nrm2_y();
+
+    }else if (STATE_SCALE == cur_state){
+        next_state = STATE_CONV_CHECK;
+        // x = y / |y|
+        f_scale_x_by_nrm2();
+
+    }else if (STATE_EXIT == cur_state){
+        sys_mod.unblock_cmd_stream();
+    }else{
+        @assert(false); // Error: unknown state
+        // assert() is ignored by HW, it could hang here
+        // To avoid a stall, trigger callback (the caveat is the wrong result)
+        sys_mod.unblock_cmd_stream();
+    }
+}
+
+fn f_reference_timestamps() void {
+    
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @bind_task( f_state, STATE);
+}
+
+comptime {
+    @export_symbol(ptr_x, "x");
+    @export_symbol(ptr_y, "y");
+    @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_time_buf_u16, "time_buf_u16");
+    @export_symbol(ptr_time_ref, "time_ref");
+}
+
+comptime{
+    @export_symbol(f_enable_timer);
+    @export_symbol(f_tic);
+    @export_symbol(f_toc);
+    @export_symbol(f_memcpy_timestamps);
+
+    @export_symbol(f_sync);
+    @export_symbol(f_power);
+
+    @export_symbol(f_reference_timestamps);
+    @rpc(LAUNCH);
+}

@@ -106,7 +106,7 @@ task dataFinTask() void {
     .extent = 1,
     .control = true,
     .fabric_color = channel,
-    .output_queue = queueId,
+    .output_queue = @get_output_queue(queueId),
   });
 
   const ctrlDsd = @get_dsd(mem1d_dsd, .{
@@ -123,7 +123,7 @@ task ctrlFinTask() void {
     .extent = 1,
     .control = true,
     .fabric_color = channel,
-    .output_queue = queueId,
+    .output_queue = @get_output_queue(queueId),
   });
 
   const ctrlDsd = @get_dsd(mem1d_dsd, .{
@@ -145,7 +145,7 @@ fn send(iterationCount: u32, offset: i16) void {
   const fabOutDataDsd = @get_dsd(fabout_dsd, .{
     .extent = chunkSize,
     .fabric_color = channel,
-    .output_queue = queueId,
+    .output_queue = @get_output_queue(queueId),
   });
 
   const props = .{ .async = true, .activate = dataFinTask };

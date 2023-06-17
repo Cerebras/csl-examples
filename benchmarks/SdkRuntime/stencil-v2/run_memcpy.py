@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+# pylint: disable=too-many-function-args
 
 import struct
 import json
@@ -29,9 +29,9 @@ from ic import computeGaussianSource
 import numpy as np
 from cmd_parser import parse_args
 
-from cerebras.sdk.runtime import runtime_utils
-from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType
-from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder
+from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder # pylint: disable=no-name-in-module
 
 SIZE = 10
 ZDIM = 10

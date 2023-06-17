@@ -19,9 +19,9 @@ import argparse
 import numpy as np
 
 from cerebras.sdk.runtime import runtime_utils
-from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime
-from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType
-from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
+from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder    # pylint: disable=no-name-in-module
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", help="the test name")

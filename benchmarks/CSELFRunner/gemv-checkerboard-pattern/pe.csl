@@ -41,7 +41,7 @@ var mul_temp = @zeros([A_local_dim_x]f16);
 const dsd_A = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> A[i, 0], .wavelet_index_offset=true});
 const dsd_mul_temp = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> mul_temp[i]});
 
-const dsd_in  = @get_dsd(fabin_dsd,  .{.fabric_color = recv, .extent = B_local_dim_x});
+const dsd_in  = @get_dsd(fabin_dsd,  .{.fabric_color = recv, .extent = B_local_dim_x, .input_queue = @get_input_queue(@get_color_id(recv))});
 const dsd_out = @get_dsd(fabout_dsd, .{ .fabric_color = send, .extent = B_local_dim_x * B_local_dim_y});
 
 task fmac_task(wlet_data : f16, idx : u16) void {

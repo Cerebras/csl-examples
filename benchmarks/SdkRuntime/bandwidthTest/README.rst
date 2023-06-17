@@ -1,7 +1,7 @@
 .. _benchmark-bandwidthTest:
 
-BandwidthTest
-=============
+Bandwidth Test
+==============
 
 This example evaluates the bandwidth between the host and the device (WSE). The
 kernel records the ``start`` and ``end`` of H2D or D2H by tsc counter. This is
