@@ -1,0 +1,170 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// color var           color  var           color  var                color  var
+//   0  LAUNCH         10  init             20   tx_east              30 reserved (memcpy)
+//   1  c0             11  compute_north    21   reserved (memcpy)    31 reserved
+//   2  c1             12  compute_south    22   reserved (memcpy)    32
+//   3  c2             13  tx_north         23   reserved (memcpy)    33 reserved (memcpy)
+//   4  c3             14  tx_south         24   compute_local        34 reserved (memcpy)
+//   5  c4             15  rx_north         25   curr_rx_north_done   35 reserved (memcpy)
+//   6  c5             16  rx_south         26   curr_rx_south_done   36 reserved (memcpy)
+//   7  allreduce_c0   17  rx_east          27   reserved (memcpy)    37 reserved (memcpy)
+//   8  allreduce_c1   18  rx_west          28   reserved (memcpy)
+//   9  allreduce_EN1  19  tx_west          29   reserved (memcpy)
+
+// LAUNCH must be a routable color 0~23
+param LAUNCH_ID: i16;
+
+// routable colors for spmv
+param c0 = @get_color(1);
+param c1 = @get_color(2);
+param c2 = @get_color(3);
+param c3 = @get_color(4);
+param c4 = @get_color(5);
+param c5 = @get_color(6);
+
+// routable colors for allreduce
+param allreduce_c0 = @get_color(7);
+param allreduce_c1 = @get_color(8);
+// entrypoint for allreduce
+param allreduce_EN1 = @get_color(9);
+
+// entrypoints for spmv
+param EN1 = @get_color(10);
+param EN2 = @get_color(11);
+param EN3 = @get_color(12);
+param EN4 = @get_color(13);
+param EN5 = @get_color(14);
+param EN6 = @get_color(15);
+param EN7 = @get_color(16);
+param EN8 = @get_color(17);
+param EN9 = @get_color(18);
+param EN10 = @get_color(19);
+param EN11 = @get_color(20);
+param EN12 = @get_color(24);
+param EN13 = @get_color(25);
+param EN14 = @get_color(26);
+
+
+const LAUNCH : color = @get_color(LAUNCH_ID);
+
+// parameters of spmv layout
+//          pcols
+//       +----------+
+// prows |  core    |
+//       +----------+
+//
+param prows: u16;   // number of PE rows (height of the core rectangle)
+param pcols: u16;   // number of PE cols (width of the core rectangle)
+
+// structure of the matrix
+param nrows: u32;   // total number of matrix rows
+param ncols: u32;   // total number of matrix cols
+param max_local_nnz: u16;       // max of the local number of nonzeros (among all PEs)
+param max_local_nnz_cols: u16;  // max of the local nnz cols
+param max_local_nnz_rows: u16;  // max of the local nnz rows
+param local_vec_sz: u16;        // size of local vector
+param local_out_vec_sz: u16;    // size of local vector
+param y_pad_start_row_idx: u16; // local row index where padding starts
+
+
+const spmv = @import_module( "hypersparse_spmv/layout.csl", .{
+    .colors = [6]color{c0, c1, c2, c3, c4, c5},
+    .entrypoints = [14]color{EN1, EN2, EN3, EN4, EN5, EN6, EN7, EN8, EN9, EN10, EN11, EN12, EN13, EN14},
+    .width = pcols,
+    .height = prows
+    });
+
+const reduce = @import_module( "allreduce2R1E/layout.csl", .{
+    .colors = [2]color{allreduce_c0, allreduce_c1},
+    .entrypoints = [1]color{allreduce_EN1},
+    .width = pcols,
+    .height = prows
+    });
+
+const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+    .width = pcols,
+    .height = prows
+    });
+
+layout {
+    // NOTE: This scheme assumes prows >= 4
+    @comptime_assert(prows >= 4);
+
+    @comptime_assert(0 == LAUNCH_ID);
+
+    //         --> px = pcol_id
+    //          pcols
+    //       +----------+
+    // prows |  core    |  | py = prow_id
+    //       |          |  V
+    //       +----------+
+    @set_rectangle(pcols, prows);
+
+    var pcol_id: u16 = 0;
+    while (pcol_id < pcols) : (pcol_id += 1) {
+
+        var prow_id: u16 = 0;
+        while (prow_id < prows) : (prow_id += 1) {
+
+            const memcpyParams = memcpy.get_params(pcol_id);
+            const spmvParams = spmv.get_params(pcol_id, prow_id);
+            const reduceParams = reduce.get_params(pcol_id, prow_id);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .spmvParams = spmvParams,
+                .reduceParams = reduceParams,
+                .LAUNCH = LAUNCH,
+                .nrows = nrows,
+                .ncols = ncols,
+                .local_vec_sz = local_vec_sz,
+                .max_local_nnz = max_local_nnz,
+                .max_local_nnz_cols = max_local_nnz_cols,
+                .max_local_nnz_rows = max_local_nnz_rows,
+                .local_out_vec_sz = local_out_vec_sz,
+                .y_pad_start_row_idx = y_pad_start_row_idx,
+            };
+            @set_tile_code(pcol_id, prow_id, "kernel.csl", params);
+
+        } // while prow_id
+    } // while pcol_id
+
+    @export_name("mat_vals_buf", [*]f32, true);
+    @export_name("x_tx_buf", [*]f32, true);
+    @export_name("y_local_buf", [*]f32, true);
+
+    @export_name("mat_rows_buf", [*]u16, true);
+    @export_name("mat_col_idx_buf", [*]u16, true);
+    @export_name("mat_col_loc_buf", [*]u16, true);
+    @export_name("mat_col_len_buf", [*]u16, true);
+    @export_name("y_rows_init_buf", [*]u16, true);
+
+    @export_name("local_nnz", [*]u16, true);
+    @export_name("local_nnz_cols", [*]u16, true);
+    @export_name("local_nnz_rows", [*]u16, true);
+
+    @export_name("time_buf_u16", [*]u16, true);
+
+    @export_name("time_ref_u16", [*]u16, true);
+
+    @export_name("f_enable_tsc", fn()void);
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_spmv", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+    @export_name("f_sync", fn(i16)void);
+    @export_name("f_reference_timestamps", fn()void);
+}

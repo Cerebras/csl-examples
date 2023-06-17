@@ -1,0 +1,136 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param colors:[6]color;
+param entrypoints:[14]color;
+param width : i16 ;   // width of the core
+param height: i16 ;   // height of the core
+
+// phase 1: north <-> south trains
+const c0: color = colors[0];
+const c1: color = colors[1];
+
+// phase 2: west <-> east trains
+const c4: color = colors[2];
+const c5: color = colors[3];
+const c6: color = colors[4];
+const c7: color = colors[5];
+
+// entrypoints
+const init: color = entrypoints[0];
+const compute_north: color = entrypoints[1];
+const compute_south: color = entrypoints[2];
+const tx_north: color = entrypoints[3];
+const tx_south: color = entrypoints[4];
+const rx_north: color = entrypoints[5];
+const rx_south: color = entrypoints[6];
+const rx_east: color = entrypoints[7];
+const rx_west: color = entrypoints[8];
+const tx_west: color = entrypoints[9];
+const tx_east: color = entrypoints[10];
+const compute_local: color = entrypoints[11];
+const curr_rx_north_done: color = entrypoints[12];
+const curr_rx_south_done: color = entrypoints[13];
+
+// invariant parameters (same on every PE)
+const invariants = .{
+    .prows = height,
+    .pcols = width,
+    .init = init,
+    // column compute
+    .compute_north = compute_north,
+    .compute_south = compute_south,
+    .compute_local = compute_local,
+    .curr_rx_north_done = curr_rx_north_done,
+    .curr_rx_south_done = curr_rx_south_done,
+    .tx_north = tx_north,
+    .tx_south = tx_south,
+    .rx_north = rx_north,
+    .rx_south = rx_south,
+    // reduction
+    .rx_west = rx_west,
+    .rx_east = rx_east,
+    .tx_west = tx_west,
+    .tx_east = tx_east,
+};
+
+
+fn get_west_east_train_colors(col_id: u16) comptime_struct {
+    if (col_id % 2 == 0) {
+        // even col
+        // return even_col_colors;
+        return .{
+            .rx_west_train = c5,
+            .rx_east_train = c6,
+            .tx_west_train = c7,
+            .tx_east_train = c4,
+        };
+    } else {
+        // odd col
+        // return odd_col_colors;
+        return .{
+            .rx_west_train = c7,
+            .rx_east_train = c4,
+            .tx_west_train = c5,
+            .tx_east_train = c6,
+        };
+    }
+}
+
+fn get_north_south_train_colors(row_id: u16) comptime_struct {
+    return .{
+        .north_train = c0,
+        .south_train = c1,
+    };
+}
+
+fn get_params(px:i16, py:i16) comptime_struct {
+
+    //         --> px = pcol_id
+    //          pcols
+    //       +----------+
+    // prows |  core    |  | py = prow_id
+    //       |          |  V
+    //       +----------+
+    //
+    const pcols: i16 = width;
+    const prows: i16 = height;
+    const pcol_id: i16 = px;
+    const prow_id: i16 = py;
+
+    const col_params = @concat_structs(invariants, get_west_east_train_colors(pcol_id));
+        
+    const common_params = @concat_structs(
+        col_params,
+        .{
+            .is_first_col = pcol_id == 0,
+            .is_last_col = pcol_id == (pcols - 1),
+        }
+    );
+
+    const row_colors = @concat_structs(
+        get_north_south_train_colors(prow_id),
+        .{
+            .is_first_row = prow_id == 0,
+            .is_second_row = prow_id == 1,
+            .is_last_row = prow_id == (prows - 1),
+            .is_second_last_row = prow_id == (prows - 2),
+        }
+    );
+
+    const row_params = @concat_structs(common_params, row_colors);
+
+    return row_params;
+}

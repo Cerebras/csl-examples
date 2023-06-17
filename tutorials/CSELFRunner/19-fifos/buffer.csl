@@ -28,7 +28,7 @@ comptime {
 }
 
 const out_color: color = @get_color(1);
-const out_queue = 1;
+const out_queue = @get_output_queue(1);
 const out_dsd = @get_dsd(fabout_dsd, .{.extent = num_elements_to_process,
                                        .fabric_color = out_color,
                                        .output_queue = out_queue});

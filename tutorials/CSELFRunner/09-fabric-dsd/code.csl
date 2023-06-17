@@ -21,6 +21,7 @@ const outColor: color = @get_color(2);
 const inDsd = @get_dsd(fabin_dsd, .{
   .extent = size,
   .fabric_color = inColor,
+  .input_queue = @get_input_queue(1),
 });
 
 const outDsd = @get_dsd(fabout_dsd, .{

@@ -20,7 +20,10 @@ param outColor: color;
 param inDir;
 param outDir;
 
-const dsd = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = outColor, .output_queue = 0 });
+const dsd = @get_dsd(fabout_dsd, .{ .extent = 1,
+                                    .fabric_color = outColor,
+                                    .output_queue = @get_output_queue(0)
+                                  });
 
 var result = @zeros([1]i16);
 const resultDsd = @get_dsd(mem1d_dsd, .{

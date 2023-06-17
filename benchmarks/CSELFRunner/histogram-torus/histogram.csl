@@ -46,10 +46,14 @@ const ew_mdsd  = @get_dsd(mem1d_dsd, .{.tensor_access=|i|{1}->stage_ew[i]});
 const stage_mdsd  = @get_dsd(
     mem1d_dsd, .{.tensor_access=|i|{1}->stage_input[i]});
 
-const ns_dsd_inputs = @get_dsd(fabout_dsd, .{.fabric_color=send_ns, .extent=1, .output_queue = 0});
-const ns_dsd_sender = @get_dsd(fabout_dsd, .{.fabric_color=send_ns, .extent=1, .output_queue = 1});
-const ew_dsd_inputs = @get_dsd(fabout_dsd, .{.fabric_color=send_we, .extent=1, .output_queue = 2});
-const ew_dsd_sender = @get_dsd(fabout_dsd, .{.fabric_color=send_we, .extent=1, .output_queue = 3});
+const ns_dsd_inputs = @get_dsd(fabout_dsd, .{.fabric_color = send_ns, .extent = 1,
+                                             .output_queue = @get_output_queue(0)});
+const ns_dsd_sender = @get_dsd(fabout_dsd, .{.fabric_color = send_ns, .extent = 1,
+                                             .output_queue = @get_output_queue(1)});
+const ew_dsd_inputs = @get_dsd(fabout_dsd, .{.fabric_color = send_we, .extent = 1,
+                                             .output_queue = @get_output_queue(2)});
+const ew_dsd_sender = @get_dsd(fabout_dsd, .{.fabric_color = send_we, .extent = 1,
+                                             .output_queue = @get_output_queue(3)});
 
 // minimum FIFO_SIZE is 2
 const FIFO_BITS : u16 = 11;

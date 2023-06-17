@@ -1,0 +1,126 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+param nb: u16;    // array tile size, corresponds to matrix dimension
+param iters: u16; // num iterations to run matvec
+
+const LAUNCH: color = @get_color(8);  // a routable color for RPC
+const EXIT:   color = @get_color(9);  // entrypoint to leave RPC
+
+// alignment calculation
+const pad_align:   u16 = 16;
+const elem_size:   u16 = 4;
+const align_ratio: u16 = pad_align / elem_size;
+const padded_nb:   u16 = if ((nb / align_ratio) * align_ratio == nb) nb
+                         else (nb / align_ratio + 1) * align_ratio;
+
+const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
+  .LAUNCH = LAUNCH,
+  .data_type = f32
+}));
+
+const timestamp = @import_module("<time>");
+var tsc_end_buf = @zeros([timestamp.tsc_size_words]u16);
+var tsc_start_buf = @zeros([timestamp.tsc_size_words]u16);
+
+var timer_buf = @zeros([3]f32);
+var ptr_timer_buf: [*]f32 = &timer_buf;
+
+var A_array: [nb*padded_nb+1]f32 align(16) = @zeros([nb*padded_nb+1]f32);
+var x_array: [nb]f32 align(16) = @zeros([nb]f32);
+var y_array: [padded_nb]f32 align(16) = @zeros([padded_nb]f32);
+var ptr_A: [*]f32 = &A_array;
+var ptr_x: [*]f32 = &x_array;
+var ptr_y: [*]f32 = &y_array;
+
+var A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{padded_nb} -> A_array[i+1] });
+var x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{nb} -> x_array[i] });
+var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{padded_nb} -> y_array[i] });
+
+const y_dest_dsr = @get_dsr(dsr_dest, 0);
+const y_src0_dsr = @get_dsr(dsr_src0, 0);
+const A_src1_dsr = @get_dsr(dsr_src1, 0);
+
+fn gemv_static_step_A(curX: f32) void {
+  @fmacs(y_dest_dsr, y_src0_dsr, A_src1_dsr, curX);
+}
+
+
+fn gemv_map() void {
+
+  // COMPUTE //
+  /////////////
+
+  // A * X = Y
+  ////////////
+
+  var local_A_dsd: mem1d_dsd = A_dsd;
+  var local_y_dsd: mem1d_dsd = y_dsd;
+  @load_to_dsr(y_dest_dsr, local_y_dsd, .{ .save_address = false });
+  @load_to_dsr(y_src0_dsr, local_y_dsd, .{ .save_address = false });
+  @load_to_dsr(A_src1_dsr, local_A_dsd, .{ .save_address = true });
+  @map(gemv_static_step_A, x_dsd);
+}
+
+
+fn compute() void {
+
+  timestamp.enable_tsc();
+  timestamp.get_timestamp(&tsc_start_buf);
+
+  for (@range(u16, iters)) |iter| {
+    gemv_map();
+  }
+
+  timestamp.get_timestamp(&tsc_end_buf);
+  timestamp.disable_tsc();
+
+  var lo_: u16 = 0;
+  var hi_: u16 = 0;
+  var word: u32 = 0;
+
+  lo_ = tsc_start_buf[0];
+  hi_ = tsc_start_buf[1];
+  timer_buf[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  lo_ = tsc_start_buf[2];
+  hi_ = tsc_end_buf[0];
+  timer_buf[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  lo_ = tsc_end_buf[1];
+  hi_ = tsc_end_buf[2];
+  timer_buf[2] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  @activate(EXIT);
+}
+
+
+task f_exit() void {
+  // the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
+}
+
+
+comptime {
+  @bind_task(f_exit, EXIT);
+
+  @export_symbol(ptr_A, "A");
+  @export_symbol(ptr_x, "x");
+  @export_symbol(ptr_y, "y");
+  @export_symbol(ptr_timer_buf, "maxmin_time");
+  @export_symbol(compute);
+  @rpc(LAUNCH);
+}

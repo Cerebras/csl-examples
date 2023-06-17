@@ -1,0 +1,175 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+
+const math_lib = @import_module("<math>");
+
+const dummy = @zeros([1]i16);
+
+var mem_y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy[i] });
+
+
+
+
+// (alpha, inv_alpha) = approx(x) approximates x by positive alpha such that
+//     x = alpha * (x/alpha)
+// where alpha = 2^(exp) and (x/alpha) has no precision loss.
+//
+// If x is a normal number, |x| = 2^(exp) * r, then alpha = 2^(exp)
+//
+// The purpose of this approximation is for nrm2(x).
+// nrm2(x) can hit overflow if we just do square-sum.
+// The simple workaround is to square-sum of x/max(x).
+// However the division is very expensive, about 50 cycles.
+// We just need a number alpha close to max(x) such that x/alpha = O(1).
+// The cost of approx is about 11 instructions, much cheaper than div.
+//
+// Assume x = sign * 2^(E-127) * mantissa, "approx" handles the following
+// four cases:
+//
+// case 1: x is a normal number
+//    0 < E < 255
+//    x is normal
+//    x = sign * 2^(E-127) * 1.b22b21... b1b0
+//    min(x) = 0x0080 0000
+//           = 2^(-126) = 1.1754943508 x 10^(-38)
+//    max(x) = 0x7f7f ffff
+//           = 2^127 x (2 - 2^(-23)) = 3.4028234664 * 10^38
+//
+// case 2: x is a subnormal number
+//    E = 0 and mantissa > 0
+//    x = sign * 2^(-127) * b22.b21... b1b0
+//      = sign * 2^(-126) * 0.b22b21... b1b0
+//    min(x) = 0x000 0001
+//           = 2^(-126) x 2^(-23) = 2^(-149) = 1.4*10^(-45)
+//    max(x) = 007f ffff
+//           = 2^(-126) x (1 - 2^(-23)) = 1.17 x 10^(-38)
+//
+// case 3: x = 0
+//    E = 0 and mantissa = 0
+//
+// case 4: x = inf or nan
+//    inf: E = 255 and mantissa = 0
+//    nan: E = 255 and mantissa > 0
+//
+// Example 1: x = 14.0
+//    alpha_u32 = 0x41000000
+//    inv_alpha_u32 = 0x3e000000
+//    alpha = 8.
+//    inv_alpha = 0.125
+// Example 2: x = 0.15625
+//    alpha_u32 = 0x3e000000
+//    inv_alpha_u32 = 0x41000000
+//    alpha = 0.125
+//    inv_alpha = 8.0
+// Example 3: x = 1.e-43
+//    alpha_u32 = 0x800000
+//    inv_alpha_u32 = 0x7e800000
+//    alpha = 1.1754943508222875e-38
+//    inv_alpha = 8.507059173023462e+37
+// Example 4: x = 1.0/0.0 (np.float32(np.inf))
+//    alpha_u32 = 0x3f800000
+//    inv_alpha_u32 = 0x3f800000
+//    alpha = 1.0
+//    inv_alpha = 1.0
+// Example 5: x = 0.0/0.0 (np.float32(np.nan))
+//    alpha_u32 = 0x3f800000
+//    inv_alpha_u32 = 0x3f800000
+//    alpha = 1.0
+//    inv_alpha = 1.0
+//
+fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
+   const MASK_EXPONENT: u32 = 0x7F800000;
+   const MASK_MANTISSA: u32 = 0x007FFFFF;
+   const x_u32: u32 = @bitcast(u32, x);
+   // x is presented by (sign | E | mantissa)
+   // sign has 1 bit, E has 8 bits and mantissa has 23 bits
+   // E = (x & MASK_EXPONEN) >> 23
+   const exp: u32 = (x_u32 & MASK_EXPONENT);
+   // mantissa = b22b21...b1b0 has 23-bit, need u32
+   const mantissa: u32 = (x_u32) & MASK_MANTISSA;
+   // E has 8-bit, use u16
+   var E: u16 = @as(u16, (exp >> 23));
+
+   // case 1: 0 < E < 255, x is normal
+   // the following if-clause handles case 2, 3 and 4
+   if (0 == E){
+        if (0 == mantissa){
+            // case 3: x = 0
+            // reset alpha = 1
+            E = 127;
+        }else{
+            // case 2: x is subnormal
+            // reset alpha= 2^(-126)
+            E = 1;
+        }
+    }
+    if (255 == E){
+        // case 4: x = inf or NAN
+        // reset alpha = 1
+        E = 127;
+    }
+    // alpha and inv_alpha are u32
+    // alpha = 2^(E - 127)
+    // inv_alpha = 1/alpha = 2^(127 - E)
+    var alpha_u32: u32 = (@as(u32, E) << 23);
+    var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
+
+    alpha.* = @bitcast(f32, alpha_u32);
+    inv_alpha.* = @bitcast(f32, inv_alpha_u32);
+}
+
+
+
+// kernel of ymax = max(|y|)
+// return max(ymax, |yval|)
+fn reduce_fabs(yval : f32, ymax : *f32) f32 {
+    var yreg: f32 = math_lib.abs(yval);
+    if (yreg > ymax.*){
+        return yreg;
+    }else{
+        return ymax.*;
+    }
+}
+
+// kernel of sum = reduce( (y/alpha)^2, +)
+// return sum + (yval/alpha)**2
+fn reduce_scale_square(yval: f32, inv_alpha: f32, sum: *f32) f32 {
+    var yreg: f32 = yval * inv_alpha;
+    return sum.* + yreg * yreg;
+}
+
+// return |y[0:n]|_2
+fn nrm2(n:i16, y: [*]f32) f32 {
+    var alpha: f32;
+    var inv_alpha: f32;
+
+    // step 1: ymax = max(|y|)
+    var ymax: f32 = @as(f32,0);
+    mem_y_dsd = @set_dsd_base_addr(mem_y_dsd, y);
+    mem_y_dsd = @set_dsd_length(mem_y_dsd, @bitcast(u16,n));
+    @map(reduce_fabs, mem_y_dsd, &ymax, &ymax);
+
+    // step 2: ymax = alpha * (ymax/alpha)
+    approx(ymax, &alpha, &inv_alpha);
+
+    // step 3: sum = reduce( (y/alpha)^2, +)
+    var sum: f32 = @as(f32, 0);
+    @map(reduce_scale_square, mem_y_dsd, inv_alpha, &sum, &sum);
+
+    // step 4: nrm2 = |y|_2 locally
+    sum = math_lib.sqrt(sum);
+    return (sum * alpha);
+}

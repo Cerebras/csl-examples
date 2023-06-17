@@ -4,6 +4,20 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 0.8.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 0.7.0.
+
+- A new set of ``SdkRuntime`` tutorials have been introduced, which
+  introduce language features by building up an increasingly complex
+  implementation of GEMV.
+
+- Several new ``SdkRuntime`` benchmark programs have been added, including
+  ``spmv-hypersparse``, ``stencil-3d-7pt``, ``powerMethod``,
+  ``conjugateGradient``, ``preconditionedConjugateGradient``, and
+  ``bicgstab``.
+
 Version 0.7.0
 -------------
 

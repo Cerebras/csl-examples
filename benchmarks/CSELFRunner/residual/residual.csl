@@ -105,7 +105,7 @@ const fab_recv_y_wdsd = @get_dsd(fabin_dsd, .{
 const fab_trans_psum_wdsd = @get_dsd(fabout_dsd, .{
     .extent = LOCAL_OUT_SZ,
     .fabric_color = TXACT_Y,
-    .output_queue = 0
+    .output_queue = @get_output_queue(0)
 });
 
 
@@ -121,7 +121,7 @@ const fab_recv_nrm_wdsd = @get_dsd(fabin_dsd, .{
 const fab_trans_nrm_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = TXACT_NRM,
-    .output_queue = 1
+    .output_queue = @get_output_queue(1)
 });
 
 

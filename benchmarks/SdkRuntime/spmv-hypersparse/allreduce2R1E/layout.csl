@@ -1,0 +1,51 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param colors: [2]color;
+param entrypoints: [1]color;
+param width: i16 ;   // width of the core
+param height: i16 ;  // height of the core
+
+
+const C0: color = colors[0];
+const C1: color = colors[1];
+
+// entrypoints of allreduce module
+// LOCK runs only if teardown is received and the operation is done
+// LOCK performs the state transition
+// teardown handler activates LOCK
+// the operation blocks LOCK in the beginning and unblocks it when it finishes
+const C_LOCK: color = entrypoints[0];
+
+fn get_params(px:i16, py:i16) comptime_struct {
+
+    var first_py: bool = (0 == py);
+    var last_py: bool = ((height-1) == py);
+
+    var first_px: bool = (0 == px);
+    var last_px: bool = ((width-1) == px);
+
+    return .{
+        .first_px = first_px,
+        .last_px = last_px,
+        .first_py = first_py,
+        .last_py = last_py,
+        .C_ROUTE = C0,
+        .C_DISPATCH = C1,
+        .C_LOCK = C_LOCK,
+        .width = width,
+        .height = height
+    };
+}

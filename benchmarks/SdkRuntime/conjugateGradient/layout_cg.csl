@@ -1,0 +1,153 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// color map: memcpy + allreduce + stencil
+//
+// color  var   color  var        color  var              color  var
+//   0   C0       9                18    EN_REDUCE_2       27   reserved (memcpy)
+//   1   C1      10  LAUNCH        19    EN_REDUCE_3       28   reserved (memcpy)
+//   2   C2      11                20    EN_REDUCE_4       29   reserved (memcpy)
+//   3   C3      12  STATE         21    reserved (memcpy) 30   reserved (memcpy)
+//   4   C4      13                22    reserved (memcpy) 31   reserved
+//   5   C5      14  EN_STENCIL_1  23    reserved (memcpy) 32
+//   6   C6      15  EN_STENCIL_2  24                      33
+//   7   C7      16  EN_STENCIL_3  25                      34
+//   8   C8      17  EN_REDUCE_1   26                      35
+//
+
+param LAUNCH_ID: i16;
+
+// c0,c1,c2,c3,c4,c5,c6,c7 are internal colors of 7-point stencil
+param C0_ID: i16;
+param C1_ID: i16;
+param C2_ID: i16;
+param C3_ID: i16;
+param C4_ID: i16;
+param C5_ID: i16;
+param C6_ID: i16;
+param C7_ID: i16;
+// c8 is an internal color of allreduce
+param C8_ID: i16;
+
+param MAX_ZDIM: i16; // maximum size of local vector x and y
+param width: i16 ; // width of the core
+param height: i16 ; // height of the core
+
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+
+const LAUNCH: color = @get_color(LAUNCH_ID);
+
+const C0: color = @get_color(C0_ID);
+const C1: color = @get_color(C1_ID);
+const C2: color = @get_color(C2_ID);
+const C3: color = @get_color(C3_ID);
+const C4: color = @get_color(C4_ID);
+const C5: color = @get_color(C5_ID);
+const C6: color = @get_color(C6_ID);
+const C7: color = @get_color(C7_ID);
+const C8: color = @get_color(C8_ID);
+
+// entrypoint of state machine in CG
+const STATE: color = @get_color(12);
+
+// entrypoints of 7-point stenil
+const EN_STENCIL_1: color = @get_color(14);
+const EN_STENCIL_2: color = @get_color(15);
+const EN_STENCIL_3: color = @get_color(16);
+
+// entrypoints of allreduce
+const EN_REDUCE_1: color = @get_color(17);
+const EN_REDUCE_2: color = @get_color(18);
+const EN_REDUCE_3: color = @get_color(19);
+const EN_REDUCE_4: color = @get_color(20);
+
+const stencil = @import_module( "stencil_3d_7pts/layout.csl", .{
+    .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
+    .entrypoints = [3]color{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
+    .width = width,
+    .height = height
+    });
+
+const reduce = @import_module( "allreduce/layout.csl", .{
+    .colors = [1]color{C8},
+    .entrypoints = [4]color{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
+    .width = width,
+    .height = height
+    });
+
+const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+    .width = width,
+    .height = height
+    });
+
+layout{
+
+    @comptime_assert(C0_ID < C1_ID);
+    @comptime_assert(C1_ID < C2_ID);
+    @comptime_assert(C2_ID < C3_ID);
+    @comptime_assert(C3_ID < C4_ID);
+    @comptime_assert(C4_ID < C5_ID);
+    @comptime_assert(C5_ID < C6_ID);
+    @comptime_assert(C6_ID < C7_ID);
+    @comptime_assert(C7_ID < C8_ID);
+    @comptime_assert(C8_ID < LAUNCH_ID);
+
+    @comptime_assert(LAUNCH_ID < 12);
+
+    // step 1: configure the rectangle which does not include halo
+    @set_rectangle( width, height );
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    var py: i16 = 0;
+    while(py < height) : (py +=1) {
+        var px: i16 = 0;
+        while(px < width) : (px +=1) {
+
+            const memcpyParams = memcpy.get_params(px);
+            const stencilParams = stencil.get_params(px, py);
+            const reduceParams = reduce.get_params(px, py);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .reduceParams = reduceParams,
+                .LAUNCH = LAUNCH,
+                .MAX_ZDIM = MAX_ZDIM,
+                .BLOCK_SIZE = BLOCK_SIZE,
+                .STATE = STATE,
+                .stencilParams = stencilParams
+            };
+
+            @set_tile_code(px, py, "kernel_cg.csl", params);
+        }
+    }
+
+    @export_name("b", [*]f32, true);
+    @export_name("x", [*]f32, true);
+    @export_name("stencil_coeff", [*]f32, true);
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("time_ref", [*]u16, true);
+    @export_name("rho", [*]f32, true);
+
+    @export_name("f_enable_timer", fn()void);
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+
+    @export_name("f_cg", fn(i16,f32,i16)void);
+
+    @export_name("f_sync", fn()void);
+    @export_name("f_reference_timestamps", fn()void);
+} // end of layout
