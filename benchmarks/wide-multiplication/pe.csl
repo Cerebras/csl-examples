@@ -1,0 +1,158 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+param LAUNCH: color;
+
+// Streaming H2D color to receive input data
+param MEMCPYH2D_DATA_1: color;
+
+// Entrypoint to trigger computation at the end of the input data
+param triggerColor: color;
+
+// Streaming D2H color to signal the completion of the program back to the host
+param MEMCPYD2H_DATA_1: color;
+
+// The number of bits to use for the result.  Inputs, also, use the same bits.
+// Since overflow, if any, is ignored, set the bits to be large enough so that
+// the computation doesn't overflow for the numbers you care about.
+param numBits: u16;
+
+// Size of a 16-bit unsigned integer, in bits.
+const wordSize = 16;
+
+var num_wvlts: i16 = 0;
+var recv_wvlts: i16 = 0;
+
+comptime {
+  // Ensure that the number of bits is indeed a multiple of the word size.
+  @comptime_assert(numBits % wordSize == 0);
+}
+
+// The number of 16-bit words that we will use to store the numeric values.
+const words = numBits / wordSize;
+
+const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
+     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+     .LAUNCH = LAUNCH
+      }));
+
+// Initialize both operands and result with zeros.
+var x = @zeros([words]u16);
+var y = @zeros([words]u16);
+var result = @zeros([words]u16);
+
+var ptr_result : [*]u16 = &result;
+
+fn willAddOverflow(left: u16, right: u16, carryFlag: bool) bool {
+  const carry = @as(u16, carryFlag);
+  return (left + right < left) or (left + right + carry < left + right);
+}
+
+task multiply() void {
+  var wordIndex:u16 = 0;
+  var wordOffset:u16 = 0;
+
+  // Loop over all bits in all words of the RHS (`y`) value
+  while (wordIndex < words) {
+    if ((y[wordIndex] & (@as(u16, 1) << wordOffset)) != 0) {
+
+      var carryBit = false;
+
+      // Add (shifted) `x` to `result`
+      var idx:u16 = 0;
+
+      while (idx < words) : (idx += 1) {
+        const newCarryBit = willAddOverflow(x[idx], result[idx], carryBit);
+
+        // Since `result` is of type u16, the addition is truncated to 16 bits
+        result[idx] += x[idx] + @as(u16, carryBit);
+        carryBit = newCarryBit;
+      }
+    }
+
+    // shift `x` left by one bit
+    var idx = @as(i16, words) - 1;
+    while (idx >= 0) : (idx -= 1) {
+      x[idx] <<= 1;
+
+      // If this is not the last word, then OR with the MSB of the next word
+      if (idx > 0) {
+        const msbMask = 0x8000;
+        if ((x[idx - 1] & msbMask) != 0) {
+          x[idx] |= 0x1;
+        }
+      }
+    }
+
+    // update counters to point to the next bit
+    if (wordOffset == 15) {
+      wordOffset = 0;
+      wordIndex += 1;
+    } else {
+      wordOffset += 1;
+    }
+  }
+
+  // DSD to send the output to the fabric via streaming D2H.
+  const outDsd = @get_dsd(fabout_dsd, .{
+    .extent = words,
+    .fabric_color = MEMCPYD2H_DATA_1,
+    .output_queue = @get_output_queue(1)
+  });
+
+  const dataDsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{words} -> result[i]
+  });
+
+  // WARNING: use async to allow memcpy's code to run while
+  // output queue 1 is full
+  @mov16(outDsd, dataDsd, .{ .async = true });
+}
+
+// Store the received word in the value at the appropriate offset
+task recvTask(data: u16, index: u16) void {
+  // Using the index allows a single color to be used for
+  // initializing both X and Y tensors
+  if (index < words) {
+    x[index] = data;
+  } else {
+    y[index - words] = data;
+  }
+  recv_wvlts += 1;
+  if (recv_wvlts == num_wvlts){
+    @activate(triggerColor);
+  }
+}
+
+comptime {
+  @bind_task(recvTask, MEMCPYH2D_DATA_1);
+  @bind_task(multiply, triggerColor);
+}
+
+// setup the length of H2D "num_wvlts"
+fn f_run(h2d_num_wvlts: i16) void {
+  num_wvlts = h2d_num_wvlts;
+
+  // WARNING: the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime{
+  @export_symbol(ptr_result, "result_");
+  @export_symbol(f_run);
+  @rpc(LAUNCH);
+}

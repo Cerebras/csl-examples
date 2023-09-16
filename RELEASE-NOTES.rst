@@ -4,6 +4,21 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 0.9.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 0.9.0.
+
+- The ``CSELFRunner`` tutorials and benchmarks have been removed. Future
+  programs should move to using ``SdkRuntime``.
+
+- In addition to the ``SdkRuntime`` GEMV tutorials, straight ports of the
+  legacy ``CSELFRunner`` tutorials have been introduced.
+
+- All remaining ``CSELFRunner`` benchmark programs have been ported to
+  ``SdkRuntime``, including ``histogram-torus``, ``mandelbrot``, ``cholesky``,
+  ``gemv-collectives_2d``, and ``wide-multiplication``.
+
 Version 0.8.0
 -------------
 

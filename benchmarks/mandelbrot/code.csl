@@ -1,0 +1,113 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The core kernel must start at P4.1 so the memcpy infrastructure has enough
+// resources to route the data between the host and the device.
+//
+
+// color map of Mandelbrot + memcpy:
+//
+// color  var           color  var             color  var              color  var
+//   0 LAUNCH             9 process_task_color   18                      27   reserved (memcpy)
+//   1 D2H               10                      19                      28   reserved (memcpy)
+//   2 routing_colors[0] 11                      20                      29   reserved
+//   3 routing_colors[1] 12                      21    reserved (memcpy) 30   reserved (memcpy)
+//   4                   13                      22    reserved (memcpy) 31   reserved
+//   5                   14                      23    reserved (memcpy) 32
+//   6                   15                      24                      33
+//   7                   16                      25                      34
+//   8 main_color        17                      26                      35
+//     recv_task_color
+//
+
+param LAUNCH_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
+
+const rectangle_size = 4;
+
+const image_height = 16;
+const image_width = 16;
+const max_iters = 8;
+
+const x_lo: f32 = -2.0;
+const x_hi: f32 = 1.0;
+const y_lo: f32 = -1.5;
+const y_hi: f32 = 1.5;
+
+const rows_per_pe = image_height / rectangle_size;
+
+const LAUNCH: color = @get_color(LAUNCH_ID);
+const MEMCPYD2H_DATA_1 : color = @get_color(MEMCPYD2H_DATA_1_ID);
+
+const routing_colors = [2]color { @get_color(2), @get_color(3) };
+
+const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+    .width = rectangle_size,
+    .height = rectangle_size
+    });
+
+layout {
+  @set_rectangle(rectangle_size, rectangle_size);
+
+  for (@range(u32, rectangle_size)) |y| {
+
+    for (@range(u32, rectangle_size)) |x| {
+      const ic = routing_colors[x % 2];
+      const oc = routing_colors[(x + 1) % 2];
+
+      const last_col: bool = ((@as(i16,rectangle_size)-1) == @as(i16,x));
+
+      const memcpy_params = memcpy.get_params(x);
+      const params = .{ .pe_x = x,
+                        .pe_y = y,
+                        .in_color = ic,
+                        .out_color = oc,
+                        .image_height = image_height,
+                        .image_width = image_width,
+                        .max_iters = max_iters,
+                        .x_lo = x_lo,
+                        .x_hi = x_hi,
+                        .y_lo = y_lo,
+                        .y_hi = y_hi,
+                        .rows_per_pe = rows_per_pe,
+                        .last_col = last_col,
+                        .LAUNCH = LAUNCH,
+                        .MEMCPYD2H_DATA_1 = MEMCPYD2H_DATA_1,
+                        .memcpy_params = memcpy_params };
+
+      if (x == 0) {
+        @set_tile_code(x, y, "left.csl", params);
+      } else {
+        @set_tile_code(x, y, "middle.csl", params);
+      }
+
+      // 1st columm of PEs does not use in_route
+      const in_route = .{.rx=.{WEST}, .tx=.{RAMP}};
+      @set_color_config(x, y, ic, .{ .routes = in_route });
+      // last column of PEs does not use out_route
+      const out_route = .{.rx=.{RAMP}, .tx=.{EAST}};
+      @set_color_config(x, y, oc, .{ .routes = out_route });
+    }
+  }
+
+  // export symbol name
+  @export_name("packet", [*]f32, true);
+
+  @export_name("f_mandelbrot", fn()void);
+}
+
+comptime{
+  @comptime_assert(LAUNCH_ID == 0);
+  @comptime_assert(MEMCPYD2H_DATA_1_ID == 1);
+}
