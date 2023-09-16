@@ -1,0 +1,816 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//
+// FD kernel with memcpy
+//
+// The sequence of execution is
+// - H2D(vp) : prepare vp
+// - H2D(source): prepare source
+// - launch(0): trigger time marching
+// - D2H(maxmin_time): record max/min of zValues and time stamps
+// - launch(1): prepare zout which is either zValues[0, zOffset] or zValues[1, zOffset]
+// - D2H(zout)
+//
+param memcpyParams: comptime_struct;
+
+param LAUNCH: color; // a routable color for RPC
+
+param COMP: color; // start time marching
+
+param _px : i16 ;
+
+param send: color;
+
+param eastFin: color;
+param westFin: color;
+param northFin: color;
+param southFin: color;
+
+param eastDataFin: color;
+param westDataFin: color;
+param northDataFin: color;
+param southDataFin: color;
+
+param eastCtrlFin: color;
+param westCtrlFin: color;
+param northCtrlFin: color;
+param southCtrlFin: color;
+
+param eastChannel: color;
+param westChannel: color;
+param northChannel: color;
+param southChannel: color;
+
+param eastCtrlFin2: color;
+param westCtrlFin2: color;
+param northCtrlFin2: color;
+param southCtrlFin2: color;
+
+param isTscOutPe: bool;
+
+param zDim: i16;
+param pattern: u16;
+param isSourcePe: bool;
+param sourceLength: u32;
+param dx: u16;
+param width: u16;
+param height: u16;
+param srcZ: u16;
+
+// Code allows do receive along 4 cardinal directions only
+// Anisotropy will require "diagonal" broadcasts
+const directionCount: u16 = 4;
+
+const timestamp = @import_module("<time>");
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+var iterations: u32 = 0;
+
+const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
+     .LAUNCH = LAUNCH
+      }));
+
+//
+// FD uses input_queue = 4,5,6,7
+// oned_exch.csl:    .input_queue = 4 + queueId,
+//                   .output_queue = queueId
+// task_memcpy.csl:  .queueId = 0,
+// task_memcpy.csl:  .queueId = 1,
+// task_memcpy.csl:  .queueId = 2,
+// task_memcpy.csl:  .queueId = 3,
+//
+// so memcpyH2D with input_queue = 0 does not collide others
+// The D2H uses output_queue = 0
+// There should not have any problem with output_queue = 0
+// because multiple colors can share the same output_queue
+//
+
+
+const zOffset: i16 = pattern - 1;
+const math = @import_module("<math>");
+
+var recvChunkCounter: i16 = 0;
+var sendChunkCounter: i16 = 0;
+
+const util = @import_module("util.csl");
+
+const numChunks = util.computeChunks(zDim);
+const chunkSize = util.computeChunkSize(zDim, @as(u16, numChunks));
+const paddedZDim = chunkSize * @as(u16, numChunks);
+
+const routes = @import_module("routes.csl", .{
+  .pattern = pattern,
+  .peWidth = width,
+  .peHeight = height,
+});
+
+const consts = @import_module("consts.csl", .{
+  .pattern = pattern,
+  .paddedZDim = paddedZDim,
+});
+
+const xConsts = consts.computeMinimigConsts(dx);
+const yConsts = consts.computeMinimigConsts(dx);
+const zConsts = consts.computeMinimigConsts(dx);
+
+// The `zValues` array determines the seed value of the program.  For now, we
+// use all zeros to match the reference code.
+var zValues = consts.initBuffer();
+var vp = @zeros([zDim]f32);
+
+//var source = @zeros([sourceLength]f32);
+var source = @zeros([zDim]f32);
+
+
+//--- MEMCPY
+const dummy = @zeros([1]f32);
+
+// d2h_buf_f32[0] = max(zValues)
+// d2h_buf_f32[1] = min(zValues)
+// d2h_buf_f32[2:4] = timestamps
+var d2h_buf_f32 = @zeros([5]f32);
+
+// temporary array to hold ether zValues[0, zOffset] or zValues[1, zOffset]
+var zout = @zeros([zDim]f32);
+
+
+// WARNING: export pointers, not arrays
+var ptr_vp : [*]f32 = &vp;
+var ptr_source : [*]f32 = &source;
+var ptr_d2h_buf_f32 : [*]f32 = &d2h_buf_f32;
+var ptr_zout : [*]f32 = &zout;
+
+
+var mem_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{zDim} -> dummy[i] });
+var mem_zout_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{zDim} -> zout[i] });
+
+//--- END MEMCPY
+
+
+//These are broadcasts stuff
+param westFirst: bool;
+param westLast: bool;
+param westPatternId: u16;
+param westNotNeedsPos3: bool;
+param westPatternFirst: bool;
+param westPatternLast: bool;
+param westSenderCount: u16;
+
+param eastFirst: bool;
+param eastLast: bool;
+param eastPatternId: u16;
+param eastNotNeedsPos3: bool;
+param eastPatternFirst: bool;
+param eastPatternLast: bool;
+param eastSenderCount: u16;
+
+param northFirst: bool;
+param northLast: bool;
+param northPatternId: u16;
+param northNotNeedsPos3: bool;
+param northPatternFirst: bool;
+param northPatternLast: bool;
+param northSenderCount: u16;
+
+param southFirst: bool;
+param southLast: bool;
+param southPatternId: u16;
+param southNotNeedsPos3: bool;
+param southPatternFirst: bool;
+param southPatternLast: bool;
+param southSenderCount: u16;
+
+// Since our code essentially uses the same communication code with parameters
+// for the direction of the communication, we compute the subset of constants
+// that will be used by each instance of the communication code.  The boolean
+// value to `fetch*Consts()` function specifies whether the constant for the
+// element at the center should be included or not.  Since we want to include
+// the center element only once, we pass `true` only for the _first_ invocation
+// of this function, while all other values are false.
+const eastConsts = consts.fetchFirstHalfConsts(xConsts, true);
+const permutedEastConsts = consts.permuteConsts(eastPatternId, eastConsts);
+
+const westConsts = consts.fetchSecondHalfConsts(xConsts, false);
+const permutedWestConsts = consts.permuteConsts(westPatternId, westConsts);
+
+const southConsts = consts.fetchFirstHalfConsts(yConsts, false);
+const permutedSouthConsts = consts.permuteConsts(southPatternId, southConsts);
+
+const northConsts = consts.fetchSecondHalfConsts(yConsts, false);
+const permutedNorthConsts = consts.permuteConsts(northPatternId, northConsts);
+
+var accumulator = @zeros([paddedZDim]f32);
+var buffer = @zeros([directionCount, pattern, chunkSize]f32);
+
+// We import a module that is parameterized on the direction of the
+// communication.  The following module handles eastward communication.
+const eastBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 0,
+  .dir = EAST,
+  .queueId = 0,
+  .dataFin = eastDataFin,
+  .ctrlFin = eastCtrlFin,
+  .channel = eastChannel,
+  .callback = eastFinTask,
+  .senderCount = eastSenderCount,
+  .ctrlCallback = eastCtrlFinTask,
+  .constants = &permutedEastConsts,
+});
+
+const westBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 1,
+  .dir = WEST,
+  .queueId = 1,
+  .dataFin = westDataFin,
+  .ctrlFin = westCtrlFin,
+  .channel = westChannel,
+  .callback = westFinTask,
+  .senderCount = westSenderCount,
+  .ctrlCallback = westCtrlFinTask,
+  .constants = &permutedWestConsts,
+});
+
+const southBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 2,
+  .dir = SOUTH,
+  .queueId = 2,
+  .dataFin = southDataFin,
+  .ctrlFin = southCtrlFin,
+  .channel = southChannel,
+  .callback = southFinTask,
+  .senderCount = southSenderCount,
+  .ctrlCallback = southCtrlFinTask,
+  .constants = &permutedSouthConsts,
+});
+
+const northBus = @import_module("oned_exch.csl", .{
+  .zValues = &zValues,
+  .buffer = &buffer,
+  .pattern = pattern,
+  .chunkSize = chunkSize,
+  .paddedZDim = paddedZDim,
+
+  .pos = 3,
+  .dir = NORTH,
+  .queueId = 3,
+  .dataFin = northDataFin,
+  .ctrlFin = northCtrlFin,
+  .channel = northChannel,
+  .callback = northFinTask,
+  .senderCount = northSenderCount,
+  .ctrlCallback = northCtrlFinTask,
+  .constants = &permutedNorthConsts,
+});
+
+var sendCount: u16 = 0;
+var recvCount: u16 = 0;
+var iterationCount: u32 = 0;
+
+var maxValue: f32 = 0.0;
+var minValue: f32 = 0.0;
+
+const accDsd = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> accumulator[i]
+});
+
+const vpDsd = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |k|{zDim} -> vp[k]
+});
+
+const zValuesDsd0 = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> zValues[0, zOffset + i]
+});
+
+const zValuesDsd1 = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{zDim} -> zValues[1, zOffset + i]
+});
+
+// This function is called when the program completes communication in any one
+// of the east, west, north, and south directions.
+fn recvFin() void {
+  recvCount += 1;
+
+  // Don't proceed until we've finished communicating in _all_ four directions.
+  if (recvCount != directionCount) {
+    return;
+  }
+
+  recvCount = 0;
+
+  // Each direction's communication module writes to a separate chunk of the
+  // buffer, so the following function call performs a sum reduction across all
+  // of these chunks.  This enables us to reuse this buffer for the next round
+  // of `chunkSize` communication without forcing us to allocate one large
+  // buffer for all chunks and for all four directions, which may require more
+  // memory than is available at any given PE.
+  reduceBuffer(recvChunkCounter * @as(i16, chunkSize));
+
+  // The above code multiplies the source data with constants for neighbors in
+  // the X and Y dimension, but we still need to multiply with the right
+  // constants in the Z dimension.  Here, we keep track of the number of chunks
+  // we've received so that we know when to start computing over the Z dim.
+  recvChunkCounter += 1;
+
+  // Note the difference in branch predicates below.  We want to continue
+  // receiving until we've received `chunkSize` values `numChunks` number of
+  // times.  However, the condition for calling `epilog()`, which processes
+  // values in the Z dimension, checks whether we've finished _sending_.  This
+  // way, we ensure that the _both_ sending and receiving code is fully complete
+  // before we begin further processing.  This also ensures that only _one_ of
+  // the `recvFin()` or `sendFin()` functions calls the `epilog()` code.
+  if (recvChunkCounter != numChunks) {
+    // Set the PE to again receive `chunkSize` values from all four directions.
+    startReceiving();
+  } else if (sendChunkCounter == numChunks) {
+    // Remainder tasks after exchanging data in all four direction.
+    epilog();
+  }
+}
+
+// Just like the code to receive `chunkSize` elements need to be called for the
+// total number of chunks, the sending code is also called multiple times so
+// that each call sends `chunkSize` elements to its neighbors.
+fn sendFin() void {
+  sendCount += 1;
+
+  // Don't proceed until we've finished sending to all four neighbors.
+  if (sendCount != directionCount) {
+    return;
+  }
+
+  sendCount = 0;
+  sendChunkCounter += 1;
+
+  // Note the difference in branch predicates below.  We want to continue
+  // sending until we've sent `chunkSize` values `numChunks` number of times.
+  // However, the condition for calling `epilog()`, which processes values in
+  // the Z dimension, checks whether we've finished _receiving_.  This way, we
+  // ensure that the _both_ sending and receiving code is fully complete before
+  // we begin further processing.  This also ensures that only _one_ of the
+  // `recvFin()` or `sendFin()` functions calls the `epilog()` code.
+  if (sendChunkCounter != numChunks) {
+    startSending(sendChunkCounter * @as(i16, chunkSize));
+  } else if (recvChunkCounter == numChunks) {
+    // Remainder tasks after exchanging data in all four direction.
+    epilog();
+  }
+}
+
+
+fn epilog() void {
+  // Multiply shifted versions of zValues with various constants, before
+  // accumulating them into `accumulator`.
+  scaleWithZConsts();
+
+  // Multiply by the velocity field vp
+  //
+  // Minimig - target_3d.c:30
+  // vp[IDX3(i,j,k)]*lap
+  //
+  @fmuls(accDsd, accDsd, vpDsd);
+
+  // Add 2x the value of the previous iteration (referred to as `u`) then
+  // subtract the value from two iterations ago (referred to as `v`).
+  // Since we want to keep track of values for _two_ iterations and not
+  // just the previous iterations, we toggle between `zValues[0, :]`
+  // and `zValues[1, :]`.
+  //
+  // Minimig - target_3d.c:30
+  // If iterationCount is even, `zValues[0, :]` contains `v[IDX3_l(i,j,k)]`
+  // and ``zValues[1, :]` contains `2.f*u[IDX3_l(i,j,k)]+vp[IDX3(i,j,k)]*lap`
+  // (and vice-versa if iterationCount is odd).
+  // This operation orresponds to `-v[IDX3_l(i,j,k)]` in:
+  // ```
+  // v[IDX3_l(i,j,k)] = 2.f*u[IDX3_l(i,j,k)]-v[IDX3_l(i,j,k)]+vp[IDX3(i,j,k)]*lap;
+  // ```
+  if (iterationCount & 1 == 0) {
+    //add 2u
+    @fmacs(accDsd, accDsd, zValuesDsd1, 2.0);
+    @fsubs(zValuesDsd0, accDsd, zValuesDsd0);
+  } else {
+    //add 2u
+    @fmacs(accDsd, accDsd, zValuesDsd0, 2.0);
+    @fsubs(zValuesDsd1, accDsd, zValuesDsd1);
+  }
+
+  // At this point, we've finished a single iteration's computation.  We now add
+  // the gaussian value to the wavefield, assuming this is the appropriate PE.
+  //
+  // Minimig - main.c:203 and data_setup.c:21-31
+  // ```
+  // kernel_add_source(grid, v, source, istep, sx, sy, sz);
+  // ```
+  //
+  if (iterationCount < sourceLength) {
+    if (isSourcePe) {
+      const thisIterationIdx = iterationCount & 1;
+      const offset = @as(u16, zOffset) + srcZ;
+      zValues[thisIterationIdx, offset] += source[iterationCount];
+    }
+  }
+
+  iterationCount += 1;
+
+  // Are we done yet?  If not, start the next iteration by triggering the send
+  // operation.
+  if (iterationCount < iterations) {
+    @activate(send);
+  } else {
+    // Now that we've finished executing the program, we have to perform four
+    // things:
+    // ref: hpc_apps/src/cslang/fd/task.csl
+    // 1. Record the value of the timestamp counter, so that the host can
+    // compute the difference and determine the number of cycles per element.
+
+    // 2. Compute the minimum and maximum value of the wavefield for each PE's
+    // local data, so that the host can simply compute the min and max of these
+    // (reduced) values instead of computing the min and max over the entire
+    // wavefield.
+
+    // 3. Assuming this is the top-right PE, send the timestamp values
+    f_checkpoint();
+  }
+}
+
+
+// This function computes the maximum of the computed result.  It switches
+// between the two `zValues` buffers depending on the executed iteration count.
+//
+// Minimig - data_setup.cc:49
+fn computeMaxValue() f32 {
+  var maxValue:f32 = math.NEGATIVE_INF_f32;
+  const lastIterationIdx = 1 - (iterationCount & 1);
+
+  if (lastIterationIdx == 0) {
+    @fmaxs(&maxValue, maxValue, zValuesDsd0);
+  } else {
+    @fmaxs(&maxValue, maxValue, zValuesDsd1);
+  }
+
+  return maxValue;
+}
+
+// This function computes the _minimum_ of the computed result.  Since there is
+// no instruction for computing the minimum and because we want to use DSDs
+// (instead of a software loop), we first negate the result, compute the
+// maximum, and negate the computed maximum (before negating the source values
+// again so as to make this operation idempotent).
+//
+// Minimig - data_setup.cc:48
+fn computeMinValue() f32 {
+  var minValue:f32 = math.NEGATIVE_INF_f32;
+  const lastIterationIdx = 1 - (iterationCount & 1);
+
+  if (lastIterationIdx == 0) {
+    @fnegs(zValuesDsd0, zValuesDsd0);
+    @fmaxs(&minValue, minValue, zValuesDsd0);
+    @fnegs(zValuesDsd0, zValuesDsd0);
+  } else {
+    @fnegs(zValuesDsd1, zValuesDsd1);
+    @fmaxs(&minValue, minValue, zValuesDsd1);
+    @fnegs(zValuesDsd1, zValuesDsd1);
+  }
+
+  return -minValue;
+}
+
+// The following are tasks that are activated when (asynchronous) send and
+// reveive operations in various directions complete.  Each task funnels to
+// either the `recvFin()` or the `sendFin()` function.  While it may _seem_
+// better to activate just one task instead of four, we cannot do so since the
+// hardware does not queue activations (instead, the hardware uses a single bit
+// to track task activations).  Thus, depending on the sequence of task
+// activations and executions, activating a task multiple times does not
+// guarantee that the said will execute multiple times.
+task eastFinTask() void {
+  recvFin();
+}
+
+task westFinTask() void {
+  recvFin();
+}
+
+task southFinTask() void {
+  recvFin();
+}
+
+task northFinTask() void {
+  recvFin();
+}
+
+task eastCtrlFinTask() void {
+  sendFin();
+}
+
+task westCtrlFinTask() void {
+  sendFin();
+}
+
+task southCtrlFinTask() void {
+  sendFin();
+}
+
+task northCtrlFinTask() void {
+  sendFin();
+}
+
+fn scaleWithZConsts() void {
+  @comptime_assert(pattern == 5);
+
+  // Ideally, we would express the following statements in a loop.  Since the
+  // loop bound is comptime-known, the compiler would then unroll the loop for
+  // us.  However, the current version of the compiler lacks the ability to
+  // unroll loops if the bounds are comptime-known, so the following code is the
+  // manually-unrolled version of the loop over `2 * pattern - 1`.
+  //
+  // Minimig - target_3d.c:3,6,9,12,15 and target_3d.c:30
+  // `vp` and `2u` are folded into `zConsts` so this corresponds to:
+  // ```
+  //  2.f*u[IDX3_l(i,j,k)] + vp * (coef0*u[IDX3_l(i,j,k)] \
+  //    +coefz[1]*(u[IDX3_l(i,j,k+1)]+u[IDX3_l(i,j,k-1)]) \
+  //    +coefz[2]*(u[IDX3_l(i,j,k+2)]+u[IDX3_l(i,j,k-2)]) \
+  //    +coefz[3]*(u[IDX3_l(i,j,k+3)]+u[IDX3_l(i,j,k-3)]) \
+  //    +coefz[4]*(u[IDX3_l(i,j,k+4)]+u[IDX3_l(i,j,k-4)]))
+  if (iterationCount & 1 != 0) {
+    const srcZ = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{zDim} -> zValues[0, i]
+    });
+    @fmacs(accDsd, accDsd, srcZ, zConsts[0]);
+
+    const srcZ1 = @increment_dsd_offset(srcZ, 1, f32);
+    @fmacs(accDsd, accDsd, srcZ1, zConsts[1]);
+
+    const srcZ2 = @increment_dsd_offset(srcZ, 2, f32);
+    @fmacs(accDsd, accDsd, srcZ2, zConsts[2]);
+
+    const srcZ3 = @increment_dsd_offset(srcZ, 3, f32);
+    @fmacs(accDsd, accDsd, srcZ3, zConsts[3]);
+
+    const srcZ5 = @increment_dsd_offset(srcZ, 5, f32);
+    @fmacs(accDsd, accDsd, srcZ5, zConsts[5]);
+
+    const srcZ6 = @increment_dsd_offset(srcZ, 6, f32);
+    @fmacs(accDsd, accDsd, srcZ6, zConsts[6]);
+
+    const srcZ7 = @increment_dsd_offset(srcZ, 7, f32);
+    @fmacs(accDsd, accDsd, srcZ7, zConsts[7]);
+
+    const srcZ8 = @increment_dsd_offset(srcZ, 8, f32);
+    @fmacs(accDsd, accDsd, srcZ8, zConsts[8]);
+  } else {
+    const srcZ = @get_dsd(mem1d_dsd, .{
+      .tensor_access = |i|{zDim} -> zValues[1, i]
+    });
+    @fmacs(accDsd, accDsd, srcZ, zConsts[0]);
+
+    const srcZ1 = @increment_dsd_offset(srcZ, 1, f32);
+    @fmacs(accDsd, accDsd, srcZ1, zConsts[1]);
+
+    const srcZ2 = @increment_dsd_offset(srcZ, 2, f32);
+    @fmacs(accDsd, accDsd, srcZ2, zConsts[2]);
+
+    const srcZ3 = @increment_dsd_offset(srcZ, 3, f32);
+    @fmacs(accDsd, accDsd, srcZ3, zConsts[3]);
+
+    const srcZ5 = @increment_dsd_offset(srcZ, 5, f32);
+    @fmacs(accDsd, accDsd, srcZ5, zConsts[5]);
+
+    const srcZ6 = @increment_dsd_offset(srcZ, 6, f32);
+    @fmacs(accDsd, accDsd, srcZ6, zConsts[6]);
+
+    const srcZ7 = @increment_dsd_offset(srcZ, 7, f32);
+    @fmacs(accDsd, accDsd, srcZ7, zConsts[7]);
+
+    const srcZ8 = @increment_dsd_offset(srcZ, 8, f32);
+    @fmacs(accDsd, accDsd, srcZ8, zConsts[8]);
+  }
+}
+
+fn reduceBuffer(offset: i16) void {
+  const bufferDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j,k|{directionCount, pattern, chunkSize} -> buffer[i, j, k]
+  });
+
+  const accumulatorDsd = @get_dsd(mem4d_dsd, .{
+    .tensor_access = |i,j,k|{directionCount, pattern, chunkSize} -> accumulator[k]
+  });
+
+  // Minimig - target_3d.c:4-14
+  // This corresponds to the sum between each component of the laplacian
+  // over x and y (buffer contains data received from each neighbor in all
+  // 4 cardinal directions)
+  const dstDsd = @increment_dsd_offset(accumulatorDsd, offset, f32);
+  @fadds(dstDsd, dstDsd, bufferDsd);
+}
+
+fn startReceiving() void {
+  // Put the PE in the receive mode for all four directions.
+  eastBus.recvMode();
+  westBus.recvMode();
+  southBus.recvMode();
+  northBus.recvMode();
+}
+
+fn startSending(offset: i16) void {
+  // Asynchronously send data to neighbors in all four directions.
+  eastBus.send(iterationCount, offset);
+  westBus.send(iterationCount, offset);
+  southBus.send(iterationCount, offset);
+  northBus.send(iterationCount, offset);
+}
+
+fn startExchange() void {
+  // Reset the chunk counters since we will be exchanging all chunks now.
+  sendChunkCounter = 0;
+  recvChunkCounter = 0;
+
+  // We first need to put the PEs in receive mode before sending local data.
+  // Starts Laplacian receive and multiplies on the fly for all 4 directions
+  startReceiving();
+  // Sends data from the previous iterations along all 4 directions
+  startSending(0);
+}
+
+task sendTask() void {
+  // zero out the accumulation buffer
+  @fmovs(accDsd, 0.0);
+  startExchange();
+}
+
+
+
+//----[MEMCPY]
+
+// iteration count, we start the timer and trigger the broadcast of the source
+// data to all the PE's neighbors.  A side effect of this design is that running
+// the code with a different iteration count simply requires sending a new
+// wavelet (with the new iteration count) from the host.
+//
+task f_comp() void {
+
+  // WARNING: iterations is received by fn f_activate_comp called by
+  // RPC mechanism
+
+  timestamp.enable_tsc();
+  timestamp.get_timestamp(&tscStartBuffer);
+  @activate(send);
+}
+//--- END MEMCPY
+
+comptime {
+  @bind_task(sendTask, send);
+
+  // For each of the four direction, we block the color's task from being
+  // activated, since we will be using the fabric input DSD to receive such
+  // wavelets.  In other words, we don't want the wavelets to trigger the
+  // non-existed task for these wavelets.
+  @block(eastChannel);
+  @bind_task(eastFinTask, eastFin);
+
+  const eastRoute = routes.computeRoute(EAST, eastFirst, eastLast,
+      eastNotNeedsPos3, eastPatternFirst, eastPatternLast);
+  @set_local_color_config(eastChannel, eastRoute);
+
+  @block(westChannel);
+  @bind_task(westFinTask, westFin);
+
+  const westRoute = routes.computeRoute(WEST, westFirst, westLast,
+      westNotNeedsPos3, westPatternFirst, westPatternLast);
+  @set_local_color_config(westChannel, westRoute);
+
+  @block(southChannel);
+  @bind_task(southFinTask, southFin);
+
+  const southRoute = routes.computeRoute(SOUTH, southFirst, southLast,
+      southNotNeedsPos3, southPatternFirst, southPatternLast);
+  @set_local_color_config(southChannel, southRoute);
+
+  @block(northChannel);
+  @bind_task(northFinTask, northFin);
+
+  const northRoute = routes.computeRoute(NORTH, northFirst, northLast,
+      northNotNeedsPos3, northPatternFirst, northPatternLast);
+  @set_local_color_config(northChannel, northRoute);
+
+  @bind_task(eastCtrlFinTask, eastCtrlFin2);
+  @bind_task(westCtrlFinTask, westCtrlFin2);
+  @bind_task(northCtrlFinTask, northCtrlFin2);
+  @bind_task(southCtrlFinTask, southCtrlFin2);
+}
+
+
+//----[MEMCPY]
+
+// time marching is done, epilog calls f_checkpoint
+// 1. recrod time stamps
+// 2. compute max and min of zValues
+// 3. prepare max, min and time stamps
+fn f_checkpoint() void {
+
+  // 1. Record the value of the timestamp counter, so that the host can
+  // compute the difference and determine the number of cycles per element.
+  timestamp.get_timestamp(&tscEndBuffer);
+  timestamp.disable_tsc();
+
+  // 2. Compute the minimum and maximum value of the wavefield for each PE's
+  // local data, so that the host can simply compute the min and max of these
+  // (reduced) values instead of computing the min and max over the entire
+  // wavefield.
+  maxValue = computeMaxValue();
+  minValue = computeMinValue();
+
+  // 3. prepares d2h_buf_f32[0:4]
+  // D2H max/min
+  d2h_buf_f32[0] = maxValue;
+  d2h_buf_f32[1] = minValue;
+
+  // D2H (timestamps)
+  // d2h_buf_f32[2] = {tscStartBuffer[1], tscStartBuffer[0]}
+  // d2h_buf_f32[3] = {tscEndBuffer[0], tscStartBuffer[2]}
+  // d2h_buf_f32[4] = {tscEndBuffer[2], tscEndBuffer[1]}
+  var lo_ : u16 = 0;
+  var hi_ : u16 = 0;
+  var word : u32 = 0;
+
+  lo_ = tscStartBuffer[0];
+  hi_ = tscStartBuffer[1];
+  d2h_buf_f32[2] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  lo_ = tscStartBuffer[2];
+  hi_ = tscEndBuffer[0];
+  d2h_buf_f32[3] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  lo_ = tscEndBuffer[1];
+  hi_ = tscEndBuffer[2];
+  d2h_buf_f32[4] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+  // WARNING: the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
+}
+
+// set number of iterations and activate f_comp task
+fn f_activate_comp(iter_cnt: u32) void {
+  iterations = iter_cnt;
+  @activate(COMP);
+}
+
+// copy zValues to zout such that D2H can output zout
+fn f_prepare_zout() void {
+  // toggle = 1 - (iterations % 2)
+  var toggle: i32 = 1 - (@as(i32,iterations) % 2);
+  if (0 == toggle){
+    mem_z_buf_dsd = @set_dsd_base_addr(mem_z_buf_dsd, @ptrcast([*]f32, &(zValues[0, zOffset])));
+  }else{
+    mem_z_buf_dsd = @set_dsd_base_addr(mem_z_buf_dsd, @ptrcast([*]f32, &(zValues[1, zOffset])));
+  }
+  @mov32(mem_zout_buf_dsd, mem_z_buf_dsd);
+
+  // WARNING: the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @comptime_assert( sourceLength <= @as(u32,zDim));
+
+    @bind_task(f_comp, COMP);
+
+    @export_symbol(ptr_vp, "vp");
+    @export_symbol(ptr_source, "source");
+    @export_symbol(ptr_d2h_buf_f32, "maxmin_time");
+    @export_symbol(ptr_zout, "zout");
+
+    @export_symbol(f_activate_comp);
+    @export_symbol(f_prepare_zout);
+    @rpc(LAUNCH);
+}

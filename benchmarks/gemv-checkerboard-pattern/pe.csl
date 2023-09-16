@@ -1,0 +1,156 @@
+// Copyright 2022 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This does y = Ax + b
+
+param memcpy_params: comptime_struct;
+
+param LAUNCH: color;
+param MEMCPYH2D_DATA_1: color; // 1st row receives x
+param MEMCPYH2D_DATA_2: color; // 1st column receives b
+param MEMCPYD2H_DATA_1: color; // last column sends out y
+
+param x_in: color; // receive x from north except 1st row
+                   // the data is broadcasted by 1st row
+
+// checkerboard color for sending result to EAST
+param send: color;
+
+// checkerboard color for receiving result from WEST except 1st column
+param recv: color;
+
+// entrypoint to perform chain reduction when y = A*x is done
+param C_REDUCE: color;
+
+// dims of A, X, B chunks on PE
+param A_local_dim_x : i16;
+param A_local_dim_y : i16;
+
+param X_local_dim_x : i16;
+param X_local_dim_y : i16;
+
+param B_local_dim_x : i16;
+param B_local_dim_y : i16;
+
+param last_column: bool;
+
+// memcpy reserves input queue 0 and output queue 0
+const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
+     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+     .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
+     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+     .LAUNCH = LAUNCH
+      }));
+
+
+// A is A_local_dim_x-by-A_local_dim_y in row-major
+var A = @zeros([A_local_dim_x, A_local_dim_y]f16);
+
+// mul_temp holds A*x
+export var mul_temp = @zeros([A_local_dim_x]f16);
+var ptr_A: [*]f16 = &A;
+
+const dsd_A = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> A[i, 0], .wavelet_index_offset=true});
+const dsd_mul_temp = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> mul_temp[i]});
+
+const dsd_in = @get_dsd(fabin_dsd, .{
+    .fabric_color = recv,
+    .extent = B_local_dim_x,
+    .input_queue = @get_input_queue(1)
+  });
+
+export var num_recv_x: i16 = 0;
+
+// receive xj = x[j]
+// compute y(:) += A(:,j)*xj
+// When WTT finishes, y = A*x, compute y = A*x + y_west
+task fmac_task(wlet_data : f16, idx : u16) void {
+  @fmach(dsd_mul_temp, dsd_mul_temp, dsd_A, wlet_data, .{.index = idx});
+  num_recv_x += 1;
+  // trigger chain reduction when last xj is received and y = A*x is done
+  if (num_recv_x >= X_local_dim_x){
+    @activate(C_REDUCE);
+  }
+}
+
+// "reduce_task" is called by all PEs after y = A*x is done
+// 1st column receives b from MEMCPYH2D_DATA_2 and forwards it to color "recv"
+// other columns receive partial result from the west
+//
+// All PEs perform y = A*x + y_west
+//
+// last column sends final result y via streaming D2H (MEMCPYD2H_DATA_1)
+// other columns send the partial result to the EAST
+//
+// The host waits until D2H receives y --> y = A*x is done
+task reduce_task() void {
+  const dsd_out = @get_dsd(fabout_dsd, .{
+    .fabric_color = if (last_column) MEMCPYD2H_DATA_1 else send,
+    .extent = B_local_dim_x,
+    .output_queue = @get_output_queue(2)
+  });
+  @faddh(dsd_out, dsd_in, dsd_mul_temp, .{ .async = true });
+}
+
+comptime {
+  @bind_task(fmac_task, x_in);
+
+  // recv is blocked because microthread is used
+  @block(recv);
+}
+
+var buf = @zeros([1]u32);
+const mem_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> buf[i] });
+
+const fab_trans_x_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = x_in,
+    .output_queue = @get_output_queue(5)
+  });
+
+// 1st row receives x from MEMCPYH2D_DATA_1, then
+// forwards data to the whole column, including itself, via color "x_in"
+task wtt_memcpyh2d_x( data : u32 ) void {
+    @block(MEMCPYH2D_DATA_1);
+    buf[0] = data;
+    @mov32(fab_trans_x_wdsd, mem_buf_dsd, .{.async=true, .unblock=MEMCPYH2D_DATA_1} );
+}
+
+const fab_trans_b_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = recv,
+    .output_queue = @get_output_queue(5)
+  });
+
+// 1st column receives b from MEMCPYH2D_DATA_2, then
+// forwards data to itself via color "recv"
+task wtt_memcpyh2d_b( data : u32 ) void {
+    @block(MEMCPYH2D_DATA_2);
+    buf[0] = data;
+    @mov32(fab_trans_b_wdsd, mem_buf_dsd, .{.async=true, .unblock=MEMCPYH2D_DATA_2} );
+}
+
+comptime{
+  @comptime_assert(X_local_dim_y == 1);
+  @comptime_assert(B_local_dim_y == 1);
+
+  @bind_task(wtt_memcpyh2d_x, MEMCPYH2D_DATA_1);
+  @bind_task(wtt_memcpyh2d_b, MEMCPYH2D_DATA_2);
+  @bind_task(reduce_task, C_REDUCE);
+}
+
+comptime{
+  @export_symbol(ptr_A, "A");
+  @rpc(LAUNCH);
+}
