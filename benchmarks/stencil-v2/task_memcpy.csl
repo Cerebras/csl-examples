@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,38 +25,37 @@
 //
 param memcpyParams: comptime_struct;
 
-param LAUNCH: color; // a routable color for RPC
-
-param COMP: color; // start time marching
-
-param _px : i16 ;
-
-param send: color;
-
-param eastFin: color;
-param westFin: color;
-param northFin: color;
-param southFin: color;
-
-param eastDataFin: color;
-param westDataFin: color;
-param northDataFin: color;
-param southDataFin: color;
-
-param eastCtrlFin: color;
-param westCtrlFin: color;
-param northCtrlFin: color;
-param southCtrlFin: color;
-
-param eastChannel: color;
-param westChannel: color;
+// Colors
+param eastChannel:  color;
+param westChannel:  color;
 param northChannel: color;
 param southChannel: color;
 
-param eastCtrlFin2: color;
-param westCtrlFin2: color;
-param northCtrlFin2: color;
-param southCtrlFin2: color;
+// Task IDs
+param COMP: local_task_id; // start time marching
+param send: local_task_id;
+
+param eastFin:  local_task_id;
+param westFin:  local_task_id;
+param northFin: local_task_id;
+param southFin: local_task_id;
+
+param eastDataFin:  local_task_id;
+param westDataFin:  local_task_id;
+param northDataFin: local_task_id;
+param southDataFin: local_task_id;
+
+param eastCtrlFin:  local_task_id;
+param westCtrlFin:  local_task_id;
+param northCtrlFin: local_task_id;
+param southCtrlFin: local_task_id;
+
+param eastCtrlFin2:  local_task_id;
+param westCtrlFin2:  local_task_id;
+param northCtrlFin2: local_task_id;
+param southCtrlFin2: local_task_id;
+
+param _px: i16;
 
 param isTscOutPe: bool;
 
@@ -79,9 +78,7 @@ var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 
 var iterations: u32 = 0;
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 //
 // FD uses input_queue = 4,5,6,7
@@ -227,8 +224,8 @@ const eastBus = @import_module("oned_exch.csl", .{
   .pos = 0,
   .dir = EAST,
   .queueId = 0,
-  .dataFin = eastDataFin,
-  .ctrlFin = eastCtrlFin,
+  .dataFin_task_id = eastDataFin,
+  .ctrlFin_task_id = eastCtrlFin,
   .channel = eastChannel,
   .callback = eastFinTask,
   .senderCount = eastSenderCount,
@@ -246,8 +243,8 @@ const westBus = @import_module("oned_exch.csl", .{
   .pos = 1,
   .dir = WEST,
   .queueId = 1,
-  .dataFin = westDataFin,
-  .ctrlFin = westCtrlFin,
+  .dataFin_task_id = westDataFin,
+  .ctrlFin_task_id = westCtrlFin,
   .channel = westChannel,
   .callback = westFinTask,
   .senderCount = westSenderCount,
@@ -265,8 +262,8 @@ const southBus = @import_module("oned_exch.csl", .{
   .pos = 2,
   .dir = SOUTH,
   .queueId = 2,
-  .dataFin = southDataFin,
-  .ctrlFin = southCtrlFin,
+  .dataFin_task_id = southDataFin,
+  .ctrlFin_task_id = southCtrlFin,
   .channel = southChannel,
   .callback = southFinTask,
   .senderCount = southSenderCount,
@@ -284,8 +281,8 @@ const northBus = @import_module("oned_exch.csl", .{
   .pos = 3,
   .dir = NORTH,
   .queueId = 3,
-  .dataFin = northDataFin,
-  .ctrlFin = northCtrlFin,
+  .dataFin_task_id = northDataFin,
+  .ctrlFin_task_id = northCtrlFin,
   .channel = northChannel,
   .callback = northFinTask,
   .senderCount = northSenderCount,
@@ -689,44 +686,44 @@ task f_comp() void {
 //--- END MEMCPY
 
 comptime {
-  @bind_task(sendTask, send);
+  @bind_local_task(sendTask, send);
 
   // For each of the four direction, we block the color's task from being
   // activated, since we will be using the fabric input DSD to receive such
   // wavelets.  In other words, we don't want the wavelets to trigger the
   // non-existed task for these wavelets.
   @block(eastChannel);
-  @bind_task(eastFinTask, eastFin);
+  @bind_local_task(eastFinTask, eastFin);
 
   const eastRoute = routes.computeRoute(EAST, eastFirst, eastLast,
       eastNotNeedsPos3, eastPatternFirst, eastPatternLast);
   @set_local_color_config(eastChannel, eastRoute);
 
   @block(westChannel);
-  @bind_task(westFinTask, westFin);
+  @bind_local_task(westFinTask, westFin);
 
   const westRoute = routes.computeRoute(WEST, westFirst, westLast,
       westNotNeedsPos3, westPatternFirst, westPatternLast);
   @set_local_color_config(westChannel, westRoute);
 
   @block(southChannel);
-  @bind_task(southFinTask, southFin);
+  @bind_local_task(southFinTask, southFin);
 
   const southRoute = routes.computeRoute(SOUTH, southFirst, southLast,
       southNotNeedsPos3, southPatternFirst, southPatternLast);
   @set_local_color_config(southChannel, southRoute);
 
   @block(northChannel);
-  @bind_task(northFinTask, northFin);
+  @bind_local_task(northFinTask, northFin);
 
   const northRoute = routes.computeRoute(NORTH, northFirst, northLast,
       northNotNeedsPos3, northPatternFirst, northPatternLast);
   @set_local_color_config(northChannel, northRoute);
 
-  @bind_task(eastCtrlFinTask, eastCtrlFin2);
-  @bind_task(westCtrlFinTask, westCtrlFin2);
-  @bind_task(northCtrlFinTask, northCtrlFin2);
-  @bind_task(southCtrlFinTask, southCtrlFin2);
+  @bind_local_task(eastCtrlFinTask, eastCtrlFin2);
+  @bind_local_task(westCtrlFinTask, westCtrlFin2);
+  @bind_local_task(northCtrlFinTask, northCtrlFin2);
+  @bind_local_task(southCtrlFinTask, southCtrlFin2);
 }
 
 
@@ -803,7 +800,7 @@ fn f_prepare_zout() void {
 comptime {
     @comptime_assert( sourceLength <= @as(u32,zDim));
 
-    @bind_task(f_comp, COMP);
+    @bind_local_task(f_comp, COMP);
 
     @export_symbol(ptr_vp, "vp");
     @export_symbol(ptr_source, "source");
@@ -812,5 +809,5 @@ comptime {
 
     @export_symbol(f_activate_comp);
     @export_symbol(f_prepare_zout);
-    @rpc(LAUNCH);
+    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

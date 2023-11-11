@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,28 +27,26 @@
 
 param memcpyParams: comptime_struct;
 
-param LAUNCH: color; // a routable color for RPC
-
-// local colors
-param RXACT_X: color; // py = 0: don't care
-                      // py > 0: receive vector x from the north
-param TXACT_X: color; // py = 0: send x to the south
-param RXACT_Y: color; // px = 0: forward b-A*x to the east
-                      // px = 1: receive partial sum (b - A*x) from px = 0
-param TXACT_Y: color;   // px = 0: send parital sum to px = 1
+// Colors
+param RXACT_X:   color; // py = 0: don't care
+                        // py > 0: receive vector x from the north
+param TXACT_X:   color; // py = 0: send x to the south
+param RXACT_Y:   color; // px = 0: forward b-A*x to the east
+                        // px = 1: receive partial sum (b - A*x) from px = 0
+param TXACT_Y:   color; // px = 0: send parital sum to px = 1
 param RXACT_NRM: color; // P1.0: receive nrm from P1.1
 param TXACT_NRM: color; // P1.1: send local nrm to P1.0
 
-// local tasks
-param COMP: color;     // compute local Ax = A*x
-param REDUCE: color;   // compute either local b - A*x or local y - A*x
-param DONE: color;     // compute |b-A*x| and send out the result
-param EXIT: color;     // entrypoint to leave RPC
+// Task IDs
+param COMP:   local_task_id; // compute local Ax = A*x
+param REDUCE: local_task_id; // compute either local b - A*x or local y - A*x
+param DONE:   local_task_id; // compute |b-A*x| and send out the result
+param EXIT:   local_task_id; // entrypoint to leave RPC
 
 
-param LOCAL_OUT_SZ:i16 ;  // dimension of submatrix A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ
-                          // dimension of subvector y is LOCAL_OUT_SZ-by-1
-param LOCAL_IN_SZ:i16  ;  // dimension of subvector x is LOCAL_IN_SZ-by-1
+param LOCAL_OUT_SZ:i16;  // dimension of submatrix A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ
+                         // dimension of subvector y is LOCAL_OUT_SZ-by-1
+param LOCAL_IN_SZ:i16;   // dimension of subvector x is LOCAL_IN_SZ-by-1
 
 
 const fabric = @import_module("<layout>");
@@ -60,9 +58,7 @@ fn get_y_coord() u16 {
     return fabric.get_y_coord();
 }
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-    }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -269,11 +265,10 @@ comptime {
     @block(RXACT_Y);
     @block(RXACT_NRM);
 
-    @bind_task(f_comp, COMP);
-    @bind_task(f_reduce, REDUCE);
-    @bind_task(f_done, DONE);
-
-    @bind_task(f_exit, EXIT);
+    @bind_local_task(f_comp, COMP);
+    @bind_local_task(f_reduce, REDUCE);
+    @bind_local_task(f_done, DONE);
+    @bind_local_task(f_exit, EXIT);
 
     @export_symbol(ptr_A, "A");
     @export_symbol(ptr_x, "x");
@@ -281,5 +276,5 @@ comptime {
     @export_symbol(ptr_nrm, "nrm");
 
     @export_symbol(bcast_x);
-    @rpc(LAUNCH);
+    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

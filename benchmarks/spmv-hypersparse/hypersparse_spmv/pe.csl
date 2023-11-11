@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,20 +33,20 @@ param tx_west_train: color;
 param tx_east_train: color;
 
 // local colors
-param init: color;
-param compute_north: color;
-param compute_south: color;
-param compute_local: color;
-param curr_rx_north_done: color;
-param curr_rx_south_done: color;
-param tx_north: color;
-param tx_south: color;
-param rx_north: color;
-param rx_south: color;
-param tx_west: color;
-param tx_east: color;
-param rx_west: color;
-param rx_east: color;
+param init: local_task_id;
+param compute_north: local_task_id;
+param compute_south: local_task_id;
+param compute_local: local_task_id;
+param curr_rx_north_done: local_task_id;
+param curr_rx_south_done: local_task_id;
+param tx_north: local_task_id;
+param tx_south: local_task_id;
+param rx_north: local_task_id;
+param rx_south: local_task_id;
+param tx_west: local_task_id;
+param tx_east: local_task_id;
+param rx_west: local_task_id;
+param rx_east: local_task_id;
 
 // in matrix params
 param ncols: u32;       // full matrix size x
@@ -1869,22 +1869,22 @@ fn spmv(x : *[local_vec_sz]f32, y: *[local_out_vec_sz]f32) void {
 comptime {
 
     // bind tasks
-    @bind_task(init_task, init);
+    @bind_local_task(init_task, init);
 
-    @bind_task(rx_north_task, rx_north);
-    @bind_task(rx_south_task, rx_south);
-    @bind_task(tx_north_task, tx_north);
-    @bind_task(tx_south_task, tx_south);
-    @bind_task(compute_north_task, compute_north);
-    @bind_task(compute_south_task, compute_south);
-    @bind_task(compute_local_task, compute_local);
-    @bind_task(curr_rx_north_done_task, curr_rx_north_done);
-    @bind_task(curr_rx_south_done_task, curr_rx_south_done);
+    @bind_local_task(rx_north_task, rx_north);
+    @bind_local_task(rx_south_task, rx_south);
+    @bind_local_task(tx_north_task, tx_north);
+    @bind_local_task(tx_south_task, tx_south);
+    @bind_local_task(compute_north_task, compute_north);
+    @bind_local_task(compute_south_task, compute_south);
+    @bind_local_task(compute_local_task, compute_local);
+    @bind_local_task(curr_rx_north_done_task, curr_rx_north_done);
+    @bind_local_task(curr_rx_south_done_task, curr_rx_south_done);
 
-    @bind_task(rx_west_task, rx_west);
-    @bind_task(rx_east_task, rx_east);
-    @bind_task(tx_west_task, tx_west);
-    @bind_task(tx_east_task, tx_east);
+    @bind_local_task(rx_west_task, rx_west);
+    @bind_local_task(rx_east_task, rx_east);
+    @bind_local_task(tx_west_task, tx_west);
+    @bind_local_task(tx_east_task, tx_east);
 
     // block all colors since we will be rx/tx'ing through uthreads.
     @block(north_train);

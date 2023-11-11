@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,39 +13,30 @@
 // limitations under the License.
 
 param memcpy_params: comptime_struct;
+param tally_params: comptime_struct;
 
-param LAUNCH: color;
-param MEMCPYH2D_DATA_1: color;
-param MEMCPYD2H_DATA_1: color;
-
-// WTT receives a signal from tally ay P(x=w-1,y=0)
-param OUT_COLOR: color;
-
-param HIST_WIDTH:i16;
-
-param INPUT_SIZE:u32;
-param N_BUCKETS:u32;
-param BUCKET_SIZE:u32;
-
-param tally_params:comptime_struct;
-
-const TALLY_EXIT: color = @get_color(15);
-
-const START: color = @get_color(24);
-const SENDER_NS: color = @get_color(25);
-const SENDER_WE: color = @get_color(26);
-
-param recv_we: color;
+// Colors
 param send_we: color;
-
-param recv_ns: color;
 param send_ns: color;
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-     .LAUNCH = LAUNCH
-      }));
+param recv_we: color;
+param recv_ns: color;
+
+// Task IDs
+const recv_we_task_id: data_task_id = @get_data_task_id(recv_we);
+const recv_ns_task_id: data_task_id = @get_data_task_id(recv_ns);
+
+const TALLY_EXIT: local_task_id = @get_local_task_id(15);
+const START:      local_task_id = @get_local_task_id(24);
+const SENDER_NS:  local_task_id = @get_local_task_id(25);
+const SENDER_WE:  local_task_id = @get_local_task_id(26);
+
+param HIST_WIDTH: i16;
+param INPUT_SIZE: u32;
+param N_BUCKETS: u32;
+param BUCKET_SIZE: u32;
+
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 const fabric = @import_module("<layout>");
 fn get_x_coord() u16 {
@@ -106,7 +97,7 @@ task sender_ns() void {
   }
   stage_ns[0] = fifo_ns[fifo_ns_head];
   fifo_ns_head = (fifo_ns_head + 1) & FIFO_MASK;
-  @unblock(recv_ns);
+  @unblock(recv_ns_task_id);
   @mov32(ns_dsd_sender, ns_mdsd, .{.async=true, .activate=sender_ns});
 }
 
@@ -118,7 +109,7 @@ task sender_we() void {
   }
   stage_ew[0] = fifo_we[fifo_we_head];
   fifo_we_head = (fifo_we_head + 1) & FIFO_MASK;
-  @unblock(recv_we);
+  @unblock(recv_we_task_id);
   @mov32(ew_dsd_sender, ew_mdsd, .{.async=true, .activate=sender_we});
 }
 
@@ -131,7 +122,7 @@ task handle_NS(wavelety:u32) void {
     fifo_ns_tail = (fifo_ns_tail + 1) & FIFO_MASK;
     @unblock(SENDER_NS);
     if (((FIFO_SIZE + fifo_ns_tail - fifo_ns_head) & FIFO_MASK) == FIFO_SIZE - 1) {
-      @block(recv_ns);
+      @block(recv_ns_task_id);
     }
     return;
   }
@@ -145,7 +136,7 @@ task handle_NS(wavelety:u32) void {
     fifo_we_tail = (fifo_we_tail + 1) & FIFO_MASK;
     @unblock(SENDER_WE);
     if (((FIFO_SIZE + fifo_we_tail - fifo_we_head) & FIFO_MASK) == FIFO_SIZE - 1) {
-      @block(recv_we);
+      @block(recv_we_task_id);
     }
     return;
 
@@ -163,7 +154,7 @@ task handle_WE(waveletx:u32) void {
     fifo_we_tail = (fifo_we_tail + 1) & FIFO_MASK;
     @unblock(SENDER_WE);
     if (((FIFO_SIZE + fifo_we_tail - fifo_we_head) & FIFO_MASK) == FIFO_SIZE - 1) {
-      @block(recv_we);
+      @block(recv_we_task_id);
     }
     return;
   }
@@ -241,19 +232,19 @@ task process_inputs() void {
 }
 
 comptime {
-  @bind_task(process_inputs, START);
+  @bind_local_task(process_inputs, START);
 
-  @bind_task(sender_ns, SENDER_NS);
+  @bind_local_task(sender_ns, SENDER_NS);
   @block(SENDER_NS);
 
-  @bind_task(sender_we, SENDER_WE);
+  @bind_local_task(sender_we, SENDER_WE);
   @block(SENDER_WE);
 
   // Receive task NS
-  @bind_task(handle_NS, recv_ns);
+  @bind_data_task(handle_NS, recv_ns_task_id);
 
   // Receive task WE
-  @bind_task(handle_WE, recv_we);
+  @bind_data_task(handle_WE, recv_we_task_id);
 }
 
 
@@ -268,7 +259,7 @@ task f_tally_exit() void {
   // we use output queue 1 (UT1)
   const outDsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
-    .fabric_color = MEMCPYD2H_DATA_1,
+    .fabric_color = sys_mod.MEMCPYD2H_1,
     .output_queue = @get_output_queue(1)
   });
 
@@ -293,10 +284,10 @@ fn f_run() void {
 }
 
 comptime{
-  @bind_task(f_tally_exit, TALLY_EXIT);
+  @bind_local_task(f_tally_exit, TALLY_EXIT);
 
   @export_symbol(ptr_inputs, "inputs");
   @export_symbol(ptr_buckets, "buckets");
   @export_symbol(f_run);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

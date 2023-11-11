@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ y_expected = A.reshape(M,N)@x + b
 # Construct a runner using SdkRuntime
 runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
-# Get symbols for A, b, x, y on device
+# Get symbols for A, x, b, y on device
 A_symbol = runner.get_id('A')
 x_symbol = runner.get_id('x')
 b_symbol = runner.get_id('b')

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,9 @@
 
 param memcpy_params: comptime_struct;
 
-param LAUNCH: color;
-
-// Streaming H2D color to receive input data
-param MEMCPYH2D_DATA_1: color;
-
-// Entrypoint to trigger computation at the end of the input data
-param triggerColor: color;
-
-// Streaming D2H color to signal the completion of the program back to the host
-param MEMCPYD2H_DATA_1: color;
+// Task IDs
+param multiply_task_id: local_task_id; // Entrypt to trigger computation at end of input data
+param h2d_1_task_id:    data_task_id;  // Data task recvTask recvs wlts along MEMCPYH2D_DATA_1
 
 // The number of bits to use for the result.  Inputs, also, use the same bits.
 // Since overflow, if any, is ignored, set the bits to be large enough so that
@@ -44,11 +37,7 @@ comptime {
 // The number of 16-bit words that we will use to store the numeric values.
 const words = numBits / wordSize;
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 // Initialize both operands and result with zeros.
 var x = @zeros([words]u16);
@@ -110,7 +99,7 @@ task multiply() void {
   // DSD to send the output to the fabric via streaming D2H.
   const outDsd = @get_dsd(fabout_dsd, .{
     .extent = words,
-    .fabric_color = MEMCPYD2H_DATA_1,
+    .fabric_color = sys_mod.MEMCPYD2H_1,
     .output_queue = @get_output_queue(1)
   });
 
@@ -134,13 +123,13 @@ task recvTask(data: u16, index: u16) void {
   }
   recv_wvlts += 1;
   if (recv_wvlts == num_wvlts){
-    @activate(triggerColor);
+    @activate(multiply_task_id);
   }
 }
 
 comptime {
-  @bind_task(recvTask, MEMCPYH2D_DATA_1);
-  @bind_task(multiply, triggerColor);
+  @bind_data_task(recvTask, h2d_1_task_id);
+  @bind_local_task(multiply, multiply_task_id);
 }
 
 // setup the length of H2D "num_wvlts"
@@ -154,5 +143,5 @@ fn f_run(h2d_num_wvlts: i16) void {
 comptime{
   @export_symbol(ptr_result, "result_");
   @export_symbol(f_run);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

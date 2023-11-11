@@ -1,7 +1,5 @@
-.. _benchmark-spmv-hypersparse:
-
 spmv-hypersparse
-=============
+================
 
 This example evaluates the performance of sparse matrix-vector multiplication.
 The kernel records the ``start`` and ``end`` of ``spmv`` by tsc counter. In

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,62 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The core kernel must start at P4.1 so the memcpy infrastructure has enough
-// resources to route the data between the host and the device.
+// color/ task ID map
 //
+//  ID var                ID var               ID var                ID var
+//   0 MEMCPY_H2D_DATA_1   9 multiply_task_id  18                    27 reserved (memcpy)
+//   1 MEMCPY_D2H_DATA_1  10                   19                    28 reserved (memcpy)
+//   2 LAUNCH             11                   20                    29 reserved
+//   3                    12                   21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13                   22 reserved (memcpy)  31 reserved
+//   5                    14                   23 reserved (memcpy)  32
+//   6                    15                   24                    33
+//   7                    16                   25                    34
+//   8                    17                   26                    35
 
-// color map of wide-multiplication + memcpy:
-//
-// color  var    color  var              color  var              color  var
-//   0 H2D          9  triggerColor        18                      27   reserved (memcpy)
-//   1 D2H         10                      19                      28   reserved (memcpy)
-//   2 LAUNCH      11                      20                      29   reserved
-//   3             12                      21    reserved (memcpy) 30   reserved (memcpy)
-//   4             13                      22    reserved (memcpy) 31   reserved
-//   5             14                      23    reserved (memcpy) 32
-//   6             15                      24                      33
-//   7             16                      25                      34
-//   8             17                      26                      35
-//
-
+// IDs for memcpy streaming colors
 param MEMCPYH2D_DATA_1_ID : i16;
 param MEMCPYD2H_DATA_1_ID : i16;
-param LAUNCH_ID: i16;
 
-// Streaming H2D color to receive input data
-const MEMCPYH2D_DATA_1 : color = @get_color(MEMCPYH2D_DATA_1_ID);
+// Colors
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID); // Recvs input data
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID); // Signals completion to host
+const LAUNCH:           color = @get_color(2);                   // RPC to setup H2D length
 
-// Streaming D2H color to signal the completion of the program back to the host
-const MEMCPYD2H_DATA_1 : color = @get_color(MEMCPYD2H_DATA_1_ID);
-
-// Setup the length of H2D
-const LAUNCH: color = @get_color(LAUNCH_ID);
-
-// Entrypoint to trigger computation at the end of the input data
-const triggerColor: color = @get_color(9);
+// Task IDs
+const multiply_task_id: local_task_id = @get_local_task_id(9); // Triggers multiply
+const h2d_1_task_id:    data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_1); // Recv H2D data
 
 // The number of bits to use for the result.  Inputs, also, use the same bits.
 // Since overflow, if any, is ignored, set the bits to be large enough so that
 // the computation doesn't overflow for the numbers you care about.
 param numBits: u16;
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = 1,
-    .height = 1
+    .height = 1,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+    .LAUNCH = LAUNCH,
     });
 
 layout {
   @set_rectangle(1, 1);
 
-  const memcpy_params = memcpy.get_params(0);
-
   @set_tile_code(0, 0, "pe.csl", .{
-    .memcpy_params = memcpy_params,
-    .numBits = numBits,
-    .LAUNCH = LAUNCH,
-    .MEMCPYH2D_DATA_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYD2H_DATA_1 = MEMCPYD2H_DATA_1,
-    .triggerColor = triggerColor,
+    .memcpy_params = memcpy.get_params(0),
+    .multiply_task_id = multiply_task_id,
+    .h2d_1_task_id = h2d_1_task_id,
+    .numBits = numBits
   });
 
   // export symbol name
@@ -78,5 +69,4 @@ layout {
 comptime{
   @comptime_assert(MEMCPYH2D_DATA_1_ID == 0);
   @comptime_assert(MEMCPYD2H_DATA_1_ID == 1);
-  @comptime_assert(LAUNCH_ID == 2);
 }

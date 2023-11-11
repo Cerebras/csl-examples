@@ -1,0 +1,128 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// color/ task ID map
+//
+//  ID var          ID var     ID var               ID var               ID var
+//   0 main_color    9 STARTUP 18                   27 reserved (memcpy) 36
+//   1 output_color 10         19                   28 reserved (memcpy) 37
+//   2 H2D_1        11 IN_1    20                   29 reserved          38
+//   3 H2D_2        12 IN_2    21 reserved (memcpy) 30 reserved (memcpy) 39
+//   4 D2H          13         22 reserved (memcpy) 31 reserved          40
+//   5              14         23 reserved (memcpy) 32                   41
+//   6              15         24                   33                   42
+//   7              16         25                   34                   43 send_result_task_id
+//   8              17         26                   35                   44
+
+//  +------+---------+------+------+
+//  | west |sentinal | core | east |
+//  +------+---------+------+------+
+
+//            +-------+              +-----------+
+//  H2D_1 --> | west  | --> IN_1 --> | sentinel  |
+//  H2D_2 --> |       | --> IN_2 --> |           |
+//            +-------+              +-----------+
+//
+//           +---------------+                        +-------+
+//  IN_1 --> | sentinel.csl  | --> OUT_1 (main_color) | core  |
+//  IN_2 --> |               |                        +-------+
+//           +---------------+
+
+// IDs for memcpy streaming colors
+param MEMCPYH2D_DATA_1_ID: i16;
+param MEMCPYH2D_DATA_2_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
+
+// number of PEs in a column
+param size: i16;
+
+// Sentinel to tell PE that it is time to send the result to the host
+const end_computation: u16 = 43;
+
+// Colors
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
+
+const main_color:   color = @get_color(0);
+const output_color: color = @get_color(1);
+
+const IN_1: color = @get_color(11);
+const IN_2: color = @get_color(12);
+
+// Task IDs
+const STARTUP:             local_task_id   = @get_local_task_id(9);
+const main_task_id:        data_task_id    = @get_data_task_id(main_color);
+const send_result_task_id: control_task_id = @get_control_task_id(end_computation);
+const IN_1_task_id:        data_task_id    = @get_data_task_id(IN_1);
+const IN_2_task_id:        data_task_id    = @get_data_task_id(IN_2);
+
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = 4,
+    .height = size,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+    });
+
+layout {
+  @set_rectangle(4, size);
+
+  const input_route  = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
+  const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
+
+  var idx :i16 = 0;
+  while (idx < size) {
+
+    // west.csl has two H2Ds
+    @set_tile_code(0, idx, "memcpyEdge/west.csl", .{
+      .memcpy_params = memcpy.get_params(0),
+      .USER_IN_1 = IN_1,
+      .USER_IN_2 = IN_2,
+      .STARTUP = STARTUP,
+    });
+
+    @set_tile_code(1, idx, "sentinel.csl", .{
+      .memcpy_params = memcpy.get_params(1),
+      .wtt_in_1_task_id = IN_1_task_id,
+      .wtt_in_2_task_id = IN_2_task_id,
+      .OUT_1 = main_color,
+      .SENTINEL = end_computation,
+    });
+
+    @set_color_config(1, idx, IN_1,       .{ .routes = input_route });
+    @set_color_config(1, idx, IN_2,       .{ .routes = input_route });
+    @set_color_config(1, idx, main_color, .{ .routes = output_route });
+
+    @set_tile_code(2, idx, "pe_program.csl", .{
+      .memcpy_params = memcpy.get_params(2),
+      .output_color = output_color,
+      .main_task_id = main_task_id,
+      .send_result_task_id = send_result_task_id
+    });
+
+    @set_color_config(2, idx, main_color,   .{ .routes = input_route });
+    @set_color_config(2, idx, output_color, .{ .routes = output_route });
+
+    // east.csl only has a D2H
+    @set_tile_code(3, idx, "memcpyEdge/east.csl", .{
+      .memcpy_params = memcpy.get_params(3),
+      .USER_OUT_1 = output_color,
+      .STARTUP = STARTUP
+    });
+
+    idx += 1;
+  }
+}

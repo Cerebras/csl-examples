@@ -1,5 +1,3 @@
-.. _benchmark-bandwidthTest:
-
 Bandwidth Test
 ==============
 

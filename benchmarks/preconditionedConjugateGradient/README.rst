@@ -1,5 +1,3 @@
-.. _benchmark-preconditionedConjugateGradient:
-
 Preconditioned Conjugate Gradient
 =================================
 

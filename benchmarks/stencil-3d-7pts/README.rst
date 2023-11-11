@@ -1,7 +1,5 @@
-.. _benchmark-stencil-3d-7pts:
-
 stencil-3d-7pts
-=============
+===============
 
 This example evaluates the performance of 7-point stencil. The kernel records
 the ``start`` and ``end`` of ``spmv`` by tsc counter. In addition the tsc

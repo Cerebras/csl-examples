@@ -23,19 +23,19 @@ following types:
 * ``\*.rst``: Documentation.
 
 The examples are divided into two main categories, tutorials and benchmarks,
-described in the following sections. Each of these categories is further
-All of the examples in this repository use the ``SdkRuntime`` host runtime.
-The legacy examples which used ``CSELFRunner`` have been removed.
+described in the following sections.
 
 Tutorials
 ---------
 
 This is the place to start.
-There are 7 tutorials which teach basic CSL language features and
+There are 10 tutorials which teach basic CSL language features and
 ``SdkRuntime`` host runtime features by building up an increasingly
 complex code to compute a GEMV.
-There are an additional 23 tutorial examples which illustrate
-specific language features.
+There are an additional 11 tutorial examples which illustrate
+specific language features,
+and 3 tutorial examples which build an increasingly complex
+pipelined computation.
 
 Benchmarks
 ----------
@@ -92,14 +92,19 @@ Branches
 
 For each release of the SDK, there is a corresponding release tag in this
 repository which contains a version of the CSL examples which are compatible
-with that SDK release. For example, the tag ``rel-sdk-0.9.0`` in this
+with that SDK release. For example, the tag ``rel-sdk-1.0.0`` in this
 repository contains a version of the CSL examples which will work (compile and
-simulate) with the SDK 0.9.0 release. The ``master`` branch is identical to the
+simulate) with the SDK 1.0.0 release. The ``master`` branch is identical to the
 newest release.
 
 Full backward compatibility of the SDK is not guaranteed.
 This means that a CSL example compatible with an older SDK release may not work
 with a newer SDK release.
+
+Documentation
+-------------
+
+For more information, see the SDK documentation `here <https://sdk.cerebras.net>`_.
 
 End User License Agreement
 --------------------------

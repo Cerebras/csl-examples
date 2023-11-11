@@ -1,5 +1,3 @@
-.. _benchmark-powerMethod:
-
 Power Method
 ============
 

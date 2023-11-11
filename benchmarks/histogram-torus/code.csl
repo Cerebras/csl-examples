@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,35 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The core kernel must start at P4.1 so the memcpy infrastructure has enough
-// resources to route the data between the host and the device.
+// color/ task ID map of histogram-torus + memcpy:
 //
-
-// color map of histogram-torus + memcpy:
-//
-// color  var           color  var             color  var              color  var
-//   0 ns_routes.c0       9 LAUNCH               18                      27   reserved (memcpy)
-//   1 ns_routes.c1      10 H2D                  19                      28   reserved (memcpy)
-//   2 ns_routes.c2      11 D2H                  20                      29   reserved
-//   3 ns_routes.c3      12 tally.c0             21    reserved (memcpy) 30   reserved (memcpy)
-//   4 we_routes.c0      13 tally.c1             22    reserved (memcpy) 31   reserved
-//   5 we_routes.c1      14 tally.c2             23    reserved (memcpy) 32
-//   6 we_routes.c2      15 TALLY_EXIT           24    START             33
-//   7 we_routes.c3      16                      25    SENDER_NS         34
-//   8 OUT_COLOR         17                      26    SENDER_WE         35
+// ID var                ID var                  ID var                ID var
+//   0 ns_routes.c0       9 LAUNCH               18                    27 reserved (memcpy)
+//   1 ns_routes.c1      10 H2D                  19                    28 reserved (memcpy)
+//   2 ns_routes.c2      11 D2H                  20                    29 reserved
+//   3 ns_routes.c3      12 tally.c0             21 reserved (memcpy)  30 reserved (memcpy)
+//   4 we_routes.c0      13 tally.c1             22 reserved (memcpy)  31 reserved
+//   5 we_routes.c1      14 tally.c2             23 reserved (memcpy)  32
+//   6 we_routes.c2      15 TALLY_EXIT           24 START              33
+//   7 we_routes.c3      16                      25 SENDER_NS          34
+//   8 OUT_COLOR         17                      26 SENDER_WE          35
 //
 
 param MEMCPYH2D_DATA_1_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
 param LAUNCH_ID: i16;
 
-param INPUT_SIZE:u32;
-param NUM_BUCKETS:u32;
-param BUCKET_SIZE:u32;
-param HIST_WIDTH:i16;
-param HIST_HEIGHT:i16;
-param OUT_COLOR:color;
+param INPUT_SIZE: u32;
+param NUM_BUCKETS: u32;
+param BUCKET_SIZE: u32;
+param HIST_WIDTH: i16;
+param HIST_HEIGHT: i16;
 
+// Colors
+param OUT_COLOR: color;
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
 const LAUNCH: color = @get_color(LAUNCH_ID);
@@ -65,9 +62,12 @@ const we_routes = @import_module("routes.csl", .{
   .FROM = WEST,
 });
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = HIST_WIDTH,
-    .height = HIST_HEIGHT
+    .height = HIST_HEIGHT,
+    .LAUNCH = LAUNCH,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
     });
 
 layout {
@@ -99,10 +99,6 @@ layout {
 
       @set_tile_code(i, j, "histogram.csl", @concat_structs( .{
         .memcpy_params = memcpy_params,
-        .LAUNCH = LAUNCH,
-        .MEMCPYH2D_DATA_1 = MEMCPYH2D_DATA_1,
-        .MEMCPYD2H_DATA_1 = MEMCPYD2H_DATA_1,
-        .OUT_COLOR = OUT_COLOR
       }, all_params));
       ns_routes.set_routes(i, j, j);
       we_routes.set_routes(i, j, i);

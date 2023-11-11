@@ -1,0 +1,125 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// kernel dimensions
+param kernel_x_dim: i16;
+param kernel_y_dim: i16;
+
+// total matrix dimensions
+param M: i16;
+param N: i16;
+
+// IDs for memcpy streaming colors
+param MEMCPYH2D_DATA_1_ID: i16; // streams x from host to top row
+param MEMCPYH2D_DATA_2_ID: i16; // streams b from host to left column
+param MEMCPYD2H_DATA_1_ID: i16; // streams y from right column to host
+
+// Colors
+const ax_color_1:       color = @get_color(3); // sends/recvs partial result Ax EAST
+const ax_color_2:       color = @get_color(4); // sends/recvs partial result Ax EAST
+const x_color:          color = @get_color(5); // sends/recvs elems x
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
+const LAUNCH:           color = @get_color(8); // Color used by memcpy for kernel launch
+
+// Task IDs
+const recv_x_task_id:        data_task_id  = @get_data_task_id(x_color); // Task ID for WTT
+const memcpy_recv_x_task_id: data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_1);
+const memcpy_recv_b_task_id: data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_2);
+const reduce_task_id:        local_task_id = @get_local_task_id(10);
+
+// This example uses kernel_x_dim x kernel_y_dim PEs
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = kernel_x_dim,
+  .height = kernel_y_dim,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+  .LAUNCH = LAUNCH
+});
+
+layout {
+  // PE coordinates are (column, row)
+  @set_rectangle(kernel_x_dim, kernel_y_dim);
+
+  const common_params = .{
+    .M_per_PE = M / kernel_y_dim,
+    .N_per_PE = N / kernel_x_dim,
+    .kernel_x_dim = kernel_x_dim,
+    .kernel_y_dim = kernel_y_dim,
+    // Colors
+    .x_color = x_color,
+    // Task IDs
+    .recv_x_task_id = recv_x_task_id,
+    .memcpy_recv_x_task_id = memcpy_recv_x_task_id,
+    .memcpy_recv_b_task_id = memcpy_recv_b_task_id,
+    .reduce_task_id = reduce_task_id
+  };
+
+  const even_params = @concat_structs(common_params, .{
+    .send_east_color = ax_color_1, .recv_west_color = ax_color_2
+  });
+
+  const odd_params = @concat_structs(common_params, .{
+    .send_east_color = ax_color_2, .recv_west_color = ax_color_1
+  });
+
+  for (@range(i16, kernel_x_dim)) |pe_x| {
+    for (@range(i16, kernel_y_dim)) |pe_y| {
+      if (pe_x % 2 == 0) {
+        @set_tile_code(pe_x, pe_y, "pe_program.csl", @concat_structs(
+          .{ .memcpy_params = memcpy.get_params(pe_x) }, even_params));
+      } else {
+        @set_tile_code(pe_x, pe_y, "pe_program.csl", @concat_structs(
+          .{ .memcpy_params = memcpy.get_params(pe_x) }, odd_params));
+      }
+    }
+  }
+
+  // Create route values
+  const RX_R_TX_RS = .{ .rx = .{RAMP},  .tx = .{RAMP, SOUTH} };
+  const RX_N_TX_RS = .{ .rx = .{NORTH}, .tx = .{RAMP, SOUTH} };
+  const RX_N_TX_R  = .{ .rx = .{NORTH}, .tx = .{RAMP} };
+
+  const RX_R_TX_R  = .{ .rx = .{RAMP},  .tx = .{RAMP} };
+  const RX_W_TX_R  = .{ .rx = .{WEST},  .tx = .{RAMP} };
+  const RX_R_TX_E  = .{ .rx = .{RAMP},  .tx = .{EAST} };
+
+  for (@range(i16, kernel_x_dim)) |pe_x| {
+    for (@range(i16, kernel_y_dim)) |pe_y| {
+      if (pe_y == 0) {
+        @set_color_config(pe_x, pe_y, x_color, .{ .routes = RX_R_TX_RS });
+      } else if (pe_y == kernel_y_dim-1) {
+        @set_color_config(pe_x, pe_y, x_color, .{ .routes = RX_N_TX_R  });
+      } else {
+        @set_color_config(pe_x, pe_y, x_color, .{ .routes = RX_N_TX_RS });
+      }
+
+      if (pe_x == 0) {
+        @set_color_config(pe_x, pe_y, ax_color_1, .{ .routes = RX_R_TX_E });
+        @set_color_config(pe_x, pe_y, ax_color_2, .{ .routes = RX_R_TX_R });
+      } else if (pe_x % 2 == 0) {
+        @set_color_config(pe_x, pe_y, ax_color_1, .{ .routes = RX_R_TX_E });
+        @set_color_config(pe_x, pe_y, ax_color_2, .{ .routes = RX_W_TX_R });
+      } else {
+        @set_color_config(pe_x, pe_y, ax_color_1, .{ .routes = RX_W_TX_R });
+        @set_color_config(pe_x, pe_y, ax_color_2, .{ .routes = RX_R_TX_E });
+      }
+    }
+  }
+
+  // export symbol names
+  @export_name("A", [*]f32, true);
+}

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-const EXIT: color = @get_color(0);
-const sync_color: color = @get_color(1);
-const transposeLR_color: color = @get_color(2);
-const transposeRL_color: color = @get_color(3);
+param memcpyParams: comptime_struct;
+
+// Colors
 const LR_color: color = @get_color(4);
 const RL_color: color = @get_color(5);
-const sentinelLR_color: color = @get_color(6);
-const sentinelRL_color: color = @get_color(7);
 
-param LAUNCH: color;
-param memcpyParams: comptime_struct;
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-    }));
+// Task IDs
+const EXIT:                local_task_id = @get_local_task_id(10);
+const sync_task_id:        local_task_id = @get_local_task_id(11);
+const transposeLR_task_id: local_task_id = @get_local_task_id(12);
+const transposeRL_task_id: local_task_id = @get_local_task_id(13);
+const sentinelLR_task_id:  local_task_id = @get_local_task_id(16);
+const sentinelRL_task_id:  local_task_id = @get_local_task_id(17);
+
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // Problem size
 param Nz: i16;
@@ -76,15 +77,15 @@ var X = @zeros([ARRAY_LEN]tensor_type);
 var X_transposed = @zeros([ARRAY_LEN]tensor_type);
 var f = @zeros([Nz]tensor_type);
 
-var ptr_X : [*]tensor_type = &X;
-var ptr_f : [*]tensor_type = &f;
+var ptr_X: [*]tensor_type = &X;
+var ptr_f: [*]tensor_type = &f;
 
 // Sentinel data for a sequence of NOP_NOCE and ADVANCE_NOCE
 var sentinel_data = @constants([2]u32, 0x8b009249);
 
 // Filter counters
-var sync_cnt:i16 = 0;
-var rev:i16 = 1;
+var sync_cnt: i16 = 0;
+var rev: i16 = 1;
 
 const X_transposed_base_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> X_transposed[i] });
 const X_base_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> X[i] });
@@ -146,17 +147,17 @@ fn f_fft() void {
   mod.fft(&f);
 
   // Initiate the Data Transpose
-  if (WIDTH > 0){
-    if (sync_cnt == 0){
+  if (WIDTH > 0) {
+    if (sync_cnt == 0) {
       if (PE_X == 0) {
-        @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR });
+        @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR_task_id });
       } else {
-        @fmovs(recvDataLeft_dsd,  recvLR_dsd, .{ .async = true, .activate = transposeLR} );
+        @fmovs(recvDataLeft_dsd,  recvLR_dsd, .{ .async = true, .activate = transposeLR_task_id });
       }
       if (PE_X == WIDTHm1) {
-        @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL });
+        @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL_task_id });
       } else {
-        @fmovs(recvDataRight_dsd, recvRL_dsd, .{ .async = true, .activate = transposeRL} );
+        @fmovs(recvDataRight_dsd, recvRL_dsd, .{ .async = true, .activate = transposeRL_task_id });
       }
     } else {
       @activate(EXIT);
@@ -170,17 +171,17 @@ fn f_ifft() void {
   mod.ifft(&f);
 
   // Initiate the Data Transpose
-  if (WIDTH > 0){
-    if (sync_cnt == 0){
+  if (WIDTH > 0) {
+    if (sync_cnt == 0) {
       if (PE_X == 0) {
-        @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR });
+        @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR_task_id });
       } else {
-        @fmovs(recvDataLeft_dsd,  recvLR_dsd, .{ .async = true, .activate = transposeLR} );
+        @fmovs(recvDataLeft_dsd,  recvLR_dsd, .{ .async = true, .activate = transposeLR_task_id });
       }
       if (PE_X == WIDTHm1) {
-        @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL });
+        @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL_task_id });
       } else {
-        @fmovs(recvDataRight_dsd, recvRL_dsd, .{ .async = true, .activate = transposeRL} );
+        @fmovs(recvDataRight_dsd, recvRL_dsd, .{ .async = true, .activate = transposeRL_task_id });
       }
     } else {
       @activate(EXIT);
@@ -190,24 +191,32 @@ fn f_ifft() void {
 
 
 // Continue the Data Transpose. Receive as much data as the position of the PE.
-task transposeLR(data: i16) void {
-  if (PE_X == WIDTHm1){@activate(sync_color);}
-  else {@fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR });}
+task transposeLR() void {
+  if (PE_X == WIDTHm1) {
+    @activate(sync_task_id);
+  } else {
+    @fmovs(sendLR_dsd, sendLeftData_dsd, .{ .async = true, .activate = sentinelLR_task_id });
+  }
 }
-task transposeRL(data: i16) void {
-  if (PE_X == 0){@activate(sync_color);}
-  else {@fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL });}
+
+task transposeRL() void {
+  if (PE_X == 0) {
+    @activate(sync_task_id);
+  } else {
+    @fmovs(sendRL_dsd, sendRightData_dsd, .{ .async = true, .activate = sentinelRL_task_id });
+  }
 }
 
 // Send control wavelets to advance the switches
-task sentinelLR(data: i16) void {
-  @mov32(sentinelLR_dsd, sentinelData_dsd, .{ .async = true, .activate = sync });
-}
-task sentinelRL(data: i16) void {
-  @mov32(sentinelRL_dsd, sentinelData_dsd, .{ .async = true, .activate = sync });
+task sentinelLR() void {
+  @mov32(sentinelLR_dsd, sentinelData_dsd, .{ .async = true, .activate = sync_task_id });
 }
 
-task sync(data: i16) void {
+task sentinelRL() void {
+  @mov32(sentinelRL_dsd, sentinelData_dsd, .{ .async = true, .activate = sync_task_id });
+}
+
+task sync() void {
   sync_cnt += 1;
   if (sync_cnt == 2) {
     if (PE_X > 0){
@@ -241,15 +250,15 @@ task f_exit() void {
 
 
 comptime {
-  @bind_task(f_exit, EXIT);
   @block(LR_color);
   @block(RL_color);
 
-  @bind_task(transposeLR, transposeLR_color);
-  @bind_task(transposeRL, transposeRL_color);
-  @bind_task(sentinelLR, sentinelLR_color);
-  @bind_task(sentinelRL, sentinelRL_color);
-  @bind_task(sync, sync_color);
+  @bind_local_task(f_exit, EXIT);
+  @bind_local_task(transposeLR, transposeLR_task_id);
+  @bind_local_task(transposeRL, transposeRL_task_id);
+  @bind_local_task(sentinelLR, sentinelLR_task_id);
+  @bind_local_task(sentinelRL, sentinelRL_task_id);
+  @bind_local_task(sync, sync_task_id);
 
   if (PE_X == 0) {
      @set_local_color_config(LR_color, .{
@@ -298,5 +307,5 @@ comptime {
   @export_symbol(ptr_f, "f");
   @export_symbol(f_fft);
   @export_symbol(f_ifft);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,25 +17,21 @@ param memcpyParams: comptime_struct;
 
 param reduceParams: comptime_struct;
 
-param LAUNCH: color;
-
 param stencilParams: comptime_struct;
 
 param MAX_ZDIM: i16; // size of vector x
 
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
 
-param STARTUP: color;
+param STARTUP: local_task_id;
 
 const timestamp = @import_module("<time>");
 
 // input/output queue ID = 0 is reserved for memcpy module
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // allreduce uses input queue/output queue 1
-const reduce_mod = @import_module( "allreduce/pe.csl", @concat_structs(reduceParams, .{
+const reduce_mod = @import_module( "../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
      .queues = [1]u16{1},
      .dest_dsr_ids = [1]u16{1},
@@ -44,7 +40,7 @@ const reduce_mod = @import_module( "allreduce/pe.csl", @concat_structs(reducePar
      }));
 
 // output queue cannot overlap input queues
-const stencil_mod = @import_module( "stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module( "../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
      .input_queues = [4]u16{3, 4, 5, 6},
      .output_queues = [1]u16{2},
@@ -157,7 +153,7 @@ comptime {
 
     @activate(STARTUP);
 
-    @bind_task( f_startup, STARTUP);
+    @bind_local_task(f_startup, STARTUP);
 }
 
 comptime {
@@ -175,5 +171,5 @@ comptime{
     @export_symbol(f_spmv);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
-    @rpc(LAUNCH);
+    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

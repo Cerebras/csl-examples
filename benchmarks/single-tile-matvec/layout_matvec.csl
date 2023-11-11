@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@ param height: u16;
 param tile_size: u16;
 param iters: u16;
 
-const memcpy = @import_module("<memcpy_multi/get_params>", .{
+const LAUNCH: color = @get_color(8);  // a routable color for RPC
+
+const memcpy = @import_module("<memcpy/get_params>", .{
   .width = width,
-  .height = height 
+  .height = height,
+  .LAUNCH = LAUNCH
 });
 
 layout {

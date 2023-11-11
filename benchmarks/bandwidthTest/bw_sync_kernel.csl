@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,6 @@
 
 param memcpyParams: comptime_struct;
 
-param LAUNCH: color; // must be less than 24
-
 param syncParams: comptime_struct;
 
 param pe_length: i16;
@@ -32,9 +30,7 @@ var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 const sync_mod = @import_module( "sync/pe.csl", @concat_structs(syncParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
@@ -143,5 +139,5 @@ comptime{
     @export_symbol(f_memcpy_timestamps);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
-    @rpc(LAUNCH);
+    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

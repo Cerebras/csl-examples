@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -93,11 +93,16 @@ param C_ROUTE: color;
 param C_DISPATCH: color; // routable color to trigger control-wavelet triggered task
                          // the routing is R --> R
 
+// C_DISPATCH guides the control-wavelet triggered tasks, it
+// does not bind to a wavelet-triggered task, so it does not
+// bind to an input queue.
+const LOCAL_DISPATCH: local_task_id = @get_local_task_id(@get_int(C_DISPATCH));
+
 // LOCK runs only if teardown is received and the operation is done
 // LOCK performs the state transition
 // teardown handler activates LOCK
 // the operation blocks LOCK in the beginning and unblocks it when it finishes
-param C_LOCK: color;
+param C_LOCK: local_task_id;
 
 param first_px: bool; // (0 == px)
 param last_px: bool;  // ((width-1) == px)
@@ -123,9 +128,13 @@ param src1_dsr_ids: [1]u16;
 
 param MAX_ZDIM: i16; // maximum size of reduced buffer
 
-const C_SEND_CTRL: color = @get_color(40);  // send switch advance
-const C_SEND_DATA: color = @get_color(41);  // send data
-const C_STATE_ENTRY: color = @get_color(42); // state machine
+const C_SEND_CTRL_ID: u16 = 40;
+const C_SEND_DATA_ID: u16 = 41;
+const C_STATE_ENTRY_ID: u16 = 42;
+
+const C_SEND_CTRL: control_task_id = @get_control_task_id(C_SEND_CTRL_ID);  // send switch advance
+const C_SEND_DATA: control_task_id = @get_control_task_id(C_SEND_DATA_ID);  // send data
+const C_STATE_ENTRY: control_task_id = @get_control_task_id(C_STATE_ENTRY_ID); // state machine
 
 const timestamp = @import_module("<time>");
 
@@ -222,7 +231,7 @@ fn allreduce( n: i16, in_tensor: *[MAX_ZDIM]f32 ) void {
    cur_state = state_seq[0];
    //@activate(C_STATE_ENTRY);
    state_dispatch = STATE_DISPATCH_STATE_ENTRY;
-   @activate(C_DISPATCH);
+   @activate(LOCAL_DISPATCH);
 }
 
 //--------------------- system utility for teardown
@@ -232,7 +241,7 @@ fn allreduce( n: i16, in_tensor: *[MAX_ZDIM]f32 ) void {
 // ref: monolith/src/ucode/kernels/lib/pe_addr_map_ein.casm
 // const TAMAP_FAB_TRAFFIC_MAP_START_ADDR = 0x7f20
 const TAMAP_FAB_MAP_START_ADDR : u16 = 0x7f20;
-const D2H_COLOR_CONFIG_ADDR : u16 = TAMAP_FAB_MAP_START_ADDR + @get_color_id(C_ROUTE);
+const D2H_COLOR_CONFIG_ADDR : u16 = TAMAP_FAB_MAP_START_ADDR + @get_int(C_ROUTE);
 
 // mask out bit 0:9, including input/output pos0
 // keep bit 10:15, including
@@ -274,7 +283,7 @@ const INPUT_RAMP: u16  = 0x200; // bit 9: onramp input mask
 // ref: monolith/src/ucode/kernels/lib/pe_addr_map_fyn.casm
 // .const TAMAP_FAB_SWITCH_CFG_START_ADDR = 0x7f40
 const TAMAP_FAB_SWITCH_CFG_START_ADDR: u16 = 0x7f40;
-const D2H_SWITCH_CONFIG_ADDR: u16 = TAMAP_FAB_SWITCH_CFG_START_ADDR + @get_color_id(C_ROUTE);
+const D2H_SWITCH_CONFIG_ADDR: u16 = TAMAP_FAB_SWITCH_CFG_START_ADDR + @get_int(C_ROUTE);
 // mask bits 14:13
 // masking with MASK_SWITCH_RESET_POS0 is equivalent to set bits14:13 to zero (i.e. back to pos0)
 const MASK_SWITCH_RESET_POS0: u16 = 0x9fff;
@@ -372,7 +381,7 @@ const fab_trans_cmd_wdsd = @get_dsd(fabout_dsd, .{
 ////////////////////////////////////////////////////////////////////////////////
 
 
-const switches = @import_module("<memcpy_multi/memcpy_switches>");
+const switches = @import_module("<memcpy/memcpy_switches>");
 
 // The following arrays define values for control wavelets, which update the
 // switch position at the recipient PEs.
@@ -474,7 +483,7 @@ fn reduce( n: u16 ) void {
     // other PEs send data and control to the east/south
     //@activate( C_SEND_DATA );  // triggers f_send_data
     state_dispatch = STATE_DISPATCH_SEND_DATA;
-    @activate(C_DISPATCH);
+    @activate(LOCAL_DISPATCH);
 }
 
 fn broadcast_to_all( n: u16 ) void {
@@ -593,7 +602,7 @@ task f_lock() void {
     cur_state = next_state; // go to next state
     //@activate(C_STATE_ENTRY);
     state_dispatch = STATE_DISPATCH_STATE_ENTRY;
-    @activate(C_DISPATCH);
+    @activate(LOCAL_DISPATCH);
 }
 
 
@@ -605,11 +614,11 @@ task f_dispatch() void {
 
     var ctrl_index: u16; // index field of a control wavelet
     if (STATE_DISPATCH_SEND_DATA == state_dispatch){
-        ctrl_index = @get_color_id(C_SEND_DATA);
+        ctrl_index = C_SEND_DATA_ID;
     }else if (STATE_DISPATCH_SEND_CTRL == state_dispatch){
-        ctrl_index = @get_color_id(C_SEND_CTRL);
+        ctrl_index = C_SEND_CTRL_ID;
     }else{ // STATE_DISPATCH_STATE_ENTRY == state_dispatch
-        ctrl_index = @get_color_id(C_STATE_ENTRY);
+        ctrl_index = C_STATE_ENTRY_ID;
     }
     mem_cmd_buf[0] = (@as(u32, ctrl_index) << 16);
     //@mov32(fab_trans_cmd_wdsd, mem_cmd_buf_dsd, .{.async=true} );
@@ -622,12 +631,12 @@ task f_dispatch() void {
 comptime {
     // last PE uses a microthread to receive data
     @block(C_ROUTE);
-    @bind_task( f_send_ctrl, C_SEND_CTRL);
-    @bind_task( f_send_data, C_SEND_DATA);
-    @bind_task( f_state_entry, C_STATE_ENTRY);
-    @bind_task( f_lock, C_LOCK);
+    @bind_control_task( f_send_ctrl, C_SEND_CTRL);
+    @bind_control_task( f_send_data, C_SEND_DATA);
+    @bind_control_task( f_state_entry, C_STATE_ENTRY);
+    @bind_local_task( f_lock, C_LOCK);
 
-    @bind_task( f_dispatch, C_DISPATCH);
+    @bind_local_task( f_dispatch, LOCAL_DISPATCH);
 }
 
 

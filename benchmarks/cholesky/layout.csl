@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,39 +15,39 @@
 // The core kernel must start at P4.1 so the memcpy infrastructure has enough
 // resources to route the data between the host and the device.
 //
-
-// color map of cholesky + memcpy:
+// color/ task ID map
 //
-// color  var         color  var        color  var              color  var
-//   0   row_color      9                 18    cont_color        27   reserved (memcpy)
-//   1   col_color     10                 19                      28   reserved (memcpy)
-//   2   LAUNCH        11                 20                      29   reserved
-//   3                 12                 21    reserved (memcpy) 30   reserved (memcpy)
-//   4                 13                 22    reserved (memcpy) 31   reserved
-//   5                 14                 23    reserved (memcpy) 32
-//   6                 15                 24                      33
-//   7                 16                 25                      34
-//   8                 17   main_color    26                      35
-//
+//  ID var        ID var           ID var                ID var
+//   0 row_color   9               18 cont_task_id       27 reserved (memcpy)
+//   1 col_color  10               19                    28 reserved (memcpy)
+//   2 LAUNCH     11               20                    29 reserved
+//   3            12               21 reserved (memcpy)  30 reserved (memcpy)
+//   4            13               22 reserved (memcpy)  31 reserved
+//   5            14               23 reserved (memcpy)  32
+//   6            15               24                    33
+//   7            16               25                    34
+//   8            17 main_task_id  26                    35
 
-param LAUNCH_ID: i16;
 param P : i16;
 param Nt: i16;
 
-const row_color = @get_color(0);
-const col_color = @get_color(1);
+// Colors
+const row_color: color = @get_color(0);
+const col_color: color = @get_color(1);
+const LAUNCH:    color = @get_color(2);
 
-const LAUNCH: color = @get_color(LAUNCH_ID);
+// Task IDs
+const main_task_id: local_task_id = @get_local_task_id(17);
+const cont_task_id: local_task_id = @get_local_task_id(18);
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = P,
-    .height = P
+    .height = P,
+    .LAUNCH = LAUNCH
     });
 
 
 layout {
-  @comptime_assert(LAUNCH_ID == 2);
-
   @set_rectangle(P, P);
 
   var x = 0;
@@ -55,14 +55,16 @@ layout {
     var y = 0;
     while (y < P) : (y += 1) {
       const memcpy_params = memcpy.get_params(x);
-      const params = .{ .px = x, .py = y, .Nt = Nt, .row_color = row_color, .col_color = col_color, .LAUNCH=LAUNCH };
+      const params = .{ .px = x, .py = y, .Nt = Nt,
+                        .row_color = row_color, .col_color = col_color,
+                        .main_task_id = main_task_id, .cont_task_id = cont_task_id };
 
       if (x <= y) {
         @set_tile_code(x, y, "pe.csl", @concat_structs( .{
              .memcpy_params = memcpy_params,
         }, params));
       } else {
-        const launch_params = .{ .Nt = Nt, .LAUNCH=LAUNCH };
+        const launch_params = .{ .Nt = Nt };
         @set_tile_code(x, y, "launch.csl", @concat_structs( .{
              .memcpy_params = memcpy_params,
         }, launch_params));
@@ -104,6 +106,5 @@ layout {
 
   // export symbol name
   @export_name("tile", [*]f32, true);
-
   @export_name("f_chol", fn()void);
 }

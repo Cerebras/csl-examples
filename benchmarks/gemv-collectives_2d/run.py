@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -116,7 +116,7 @@ runner.memcpy_h2d(symbol_b, B, 0, 0, 1, 1, matrix_rows,
 
 print("Launching kernel...")
 # Run the kernel
-runner.call("main", [], nonblock=False)
+runner.launch("main", nonblock=False)
 
 # Collect the result y from PE (kernel_cols-1,kernel_rows-1) and compare to expected
 y = np.zeros(matrix_rows, dtype=np.float32)

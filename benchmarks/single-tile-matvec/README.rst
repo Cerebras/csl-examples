@@ -1,5 +1,3 @@
-.. _benchmark-single-tile-matvec:
-
 Single Tile Matvec
 ==================
 

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,15 +14,12 @@
 
 param memcpy_params: comptime_struct;
 param Nt: u16;
-param LAUNCH: color;
 
 var tile = @zeros([Nt*Nt]f32);
 
 var ptr_tile : [*]f32 = &tile;
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 fn f_chol() void {
   // WARNING: the user must unblock cmd color for every PE
@@ -33,5 +30,5 @@ comptime{
   @export_symbol(ptr_tile, "tile");
 
   @export_symbol(f_chol);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

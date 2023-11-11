@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,23 +40,23 @@ param c5 = @get_color(6);
 param allreduce_c0 = @get_color(7);
 param allreduce_c1 = @get_color(8);
 // entrypoint for allreduce
-param allreduce_EN1 = @get_color(9);
+param allreduce_EN1: local_task_id = @get_local_task_id(9);
 
 // entrypoints for spmv
-param EN1 = @get_color(10);
-param EN2 = @get_color(11);
-param EN3 = @get_color(12);
-param EN4 = @get_color(13);
-param EN5 = @get_color(14);
-param EN6 = @get_color(15);
-param EN7 = @get_color(16);
-param EN8 = @get_color(17);
-param EN9 = @get_color(18);
-param EN10 = @get_color(19);
-param EN11 = @get_color(20);
-param EN12 = @get_color(24);
-param EN13 = @get_color(25);
-param EN14 = @get_color(26);
+param EN1: local_task_id = @get_local_task_id(10);
+param EN2: local_task_id = @get_local_task_id(11);
+param EN3: local_task_id = @get_local_task_id(12);
+param EN4: local_task_id = @get_local_task_id(13);
+param EN5: local_task_id = @get_local_task_id(14);
+param EN6: local_task_id = @get_local_task_id(15);
+param EN7: local_task_id = @get_local_task_id(16);
+param EN8: local_task_id = @get_local_task_id(17);
+param EN9: local_task_id = @get_local_task_id(18);
+param EN10: local_task_id = @get_local_task_id(19);
+param EN11: local_task_id = @get_local_task_id(20);
+param EN12: local_task_id = @get_local_task_id(24);
+param EN13: local_task_id = @get_local_task_id(25);
+param EN14: local_task_id = @get_local_task_id(26);
 
 
 const LAUNCH : color = @get_color(LAUNCH_ID);
@@ -83,21 +83,22 @@ param y_pad_start_row_idx: u16; // local row index where padding starts
 
 const spmv = @import_module( "hypersparse_spmv/layout.csl", .{
     .colors = [6]color{c0, c1, c2, c3, c4, c5},
-    .entrypoints = [14]color{EN1, EN2, EN3, EN4, EN5, EN6, EN7, EN8, EN9, EN10, EN11, EN12, EN13, EN14},
+    .entrypoints = [14]local_task_id{EN1, EN2, EN3, EN4, EN5, EN6, EN7, EN8, EN9, EN10, EN11, EN12, EN13, EN14},
     .width = pcols,
     .height = prows
     });
 
 const reduce = @import_module( "allreduce2R1E/layout.csl", .{
     .colors = [2]color{allreduce_c0, allreduce_c1},
-    .entrypoints = [1]color{allreduce_EN1},
+    .entrypoints = [1]local_task_id{allreduce_EN1},
     .width = pcols,
     .height = prows
     });
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = pcols,
-    .height = prows
+    .height = prows,
+    .LAUNCH = LAUNCH
     });
 
 layout {
@@ -127,7 +128,6 @@ layout {
                 .memcpyParams = memcpyParams,
                 .spmvParams = spmvParams,
                 .reduceParams = reduceParams,
-                .LAUNCH = LAUNCH,
                 .nrows = nrows,
                 .ncols = ncols,
                 .local_vec_sz = local_vec_sz,

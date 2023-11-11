@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,7 +57,6 @@ import shutil
 import subprocess
 import numpy as np
 
-from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder # pylint: disable=no-name-in-module
 
@@ -280,67 +279,76 @@ def main():
 
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   memcpy_order = MemcpyOrder.ROW_MAJOR
-  simulator = SdkRuntime(args.name, cmaddr=args.cmaddr)
+  runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
-  symbol_A = simulator.get_id("A")
-  symbol_x = simulator.get_id("x")
-  symbol_y = simulator.get_id("y")
-  symbol_nrm = simulator.get_id("nrm")
-  print(f"symbol_A = {symbol_A}")
-  print(f"symbol_x = {symbol_x}")
-  print(f"symbol_y = {symbol_y}")
-  print(f"symbol_nrm = {symbol_nrm}")
+  sym_A = runner.get_id("A")
+  sym_x = runner.get_id("x")
+  sym_y = runner.get_id("y")
+  sym_nrm = runner.get_id("nrm")
 
-  simulator.load()
-  simulator.run()
+  runner.load()
+  runner.run()
 
-  # A is M-by-N
-  iportmap_A = f"{{ A[j=0:{M-1}][i=0:{N-1}] -> [PE[i//{LOCAL_IN_SZ}, j//{LOCAL_OUT_SZ}] -> \
-        index[i%{LOCAL_IN_SZ}, j%{LOCAL_OUT_SZ}]] }}"
-  print(f"iportmap_A = {iportmap_A}")
-
-  # x distributes to {py = 0}
-  iportmap_x = f"{{ x[i=0:{N-1}][j=0] -> [PE[i//{LOCAL_IN_SZ}, 0] ->  \
-        index[i%{LOCAL_IN_SZ}]] }}"
-  print(f"iportmap_x = {iportmap_x}")
-
-  # b distributes to {px = 0}
-  #  i = N*(i/N) + (i % N)  ==> PE_y = (i/N)
-  iportmap_b = f"{{ b[i=0:{M-1}][j=0] -> [PE[0, i//{LOCAL_OUT_SZ}] -> \
-        index[i%{LOCAL_OUT_SZ}]] }}"
-  print(f"iportmap_b = {iportmap_b}")
+  # How to transform a 2-D tensor into a cliff distribution with
+  # column-major local tensor
+  #
+  # Example: w=2, h=2, A is 4-by-4 (lh-by-lw)
+  # A = |  0  1  2  3 |
+  #     |  4  5  6  7 |
+  #     |  8  9 10 11 |
+  #     | 12 13 14 15 |
+  # A1 = A.reshape(2,2,2,2) of the form (h,lh,w,lw)
+  # A1 = | | 0  1|  | 4  5| |
+  #      | | 2  3|, | 6  7| |
+  #      |                  |
+  #      | | 8  9|  |12 13| |
+  #      | |10 11|, |14 15| |
+  # A2 = A1.transpose(0, 2, 3, 1) of the form (h, w, lw, lh)
+  # so the local tensor lh-by-lw is col-major
+  # A2 = | | 0  4|  | 2  6| |
+  #      | | 1  5|, | 3  7| |
+  #      |                  |
+  #      | | 8 12|  |10 14| |
+  #      | | 9 13|, |11 15| |
+  # A3 = A2.reshape(2,2,4)
+  # A3 = |  0  4  1  5 |
+  #      |  2  6  3  7 |
+  #      |  8 12  9 13 |
+  #      | 10 14 11 15 |
+  # A3 is h-w-l
 
   # |b-A*x| is from P1.0
   oportmap_nrm_r = "{ nrm_r[i=0:0][j=0] -> [PE[1, 0] -> index[i]] }"
   print(f"oportmap_nrm_r = {oportmap_nrm_r}")
 
   # prepare A, x and b via memcpy
-  # use the runtime_utils library to calculate memcpy args and shuffle data
-  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_A, A)
-  simulator.memcpy_h2d(symbol_A, data, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_x, x)
-  simulator.memcpy_h2d(symbol_x, data, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_b, b)
-  simulator.memcpy_h2d(symbol_y, data, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
+  A1 = A.reshape(height, LOCAL_OUT_SZ, width, LOCAL_IN_SZ)
+  A2 = A1.transpose(0, 2, 3, 1)
+  A3 = A2.reshape(height, width, LOCAL_OUT_SZ*LOCAL_IN_SZ)
+  runner.memcpy_h2d(sym_A, A3.ravel(), 0, 0, width, height, LOCAL_OUT_SZ*LOCAL_IN_SZ,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
+
+  # x distributes to {py = 0}
+  runner.memcpy_h2d(sym_x, x.ravel(), 0, 0, width, 1, LOCAL_IN_SZ,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
+
+  # b distributes to {px = 0}
+  runner.memcpy_h2d(sym_y, b.ravel(), 0, 0, 1, height, LOCAL_OUT_SZ,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
 
   # trigger the computation
-  simulator.call("bcast_x", [], nonblock=False)
+  runner.launch("bcast_x", nonblock=False)
 
-  # receive |b-A*x| from P1.1
-  # use the runtime_utils library to calculate memcpy args and manage output data
-  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap_nrm_r, np.float32)
-  simulator.memcpy_d2h(data, symbol_nrm, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  nrm_r_cs = runtime_utils.format_output_tensor(oportmap_nrm_r, np.float32, data)
+  # receive |b-A*x| from P1.0
+  nrm_r_cs = np.zeros(1, np.float32)
+  runner.memcpy_d2h(nrm_r_cs, sym_nrm, 1, 0, 1, 1, 1,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
 
-  simulator.stop()
+  runner.stop()
 
   if args.cmaddr is None:
     # move simulation log and core dump to the given folder
@@ -357,12 +365,12 @@ def main():
       shutil.move(src_trace, dst_trace)
 
   print(f"`nrm_r`     from CPU:\n{nrm_r}")
-  print(f"`nrm_r_cs`  from CS1 (1-by-1 matrix):\n{nrm_r_cs}")
+  print(f"`nrm_r_cs`  from CS1:\n{nrm_r_cs}")
 
-  dr = abs(nrm_r - nrm_r_cs[(0, 0)])
+  dr = abs(nrm_r - nrm_r_cs[0])
   print(f"|nrm_r - nrm_r_cs| = {dr}")
 
-  assert np.allclose(nrm_r, nrm_r_cs[(0, 0)], 1.e-5)
+  assert np.allclose(nrm_r, nrm_r_cs[0], 1.e-5)
   print("\nSUCCESS!")
 
 

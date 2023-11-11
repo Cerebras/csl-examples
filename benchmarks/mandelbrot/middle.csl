@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 const common = @import_module("common.csl");
 
-const recv_task_color: color = @get_color(8);
-const process_task_color: color = @get_color(9);
+param memcpy_params: comptime_struct;
+
+// Colors
+param in_color:  color;
+param out_color: color;
+
+// Task IDs
+const recv_task_id:    local_task_id = @get_local_task_id(8);
+const process_task_id: local_task_id = @get_local_task_id(9);
 
 param pe_x: u32;
 param pe_y: u32;
-
-param in_color;
-param out_color;
 
 param image_height: u32;
 param image_width: u32;
@@ -32,15 +35,8 @@ param rows_per_pe: u32;
 
 param last_col: bool;
 
-param memcpy_params: comptime_struct;
-param MEMCPYD2H_DATA_1: color;
-param LAUNCH: color;
-
 // input/output queue ID = 0 is reserved for memcpy module
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 var col: u32 = 0;
 var row: u32 = pe_y * rows_per_pe;
@@ -77,7 +73,7 @@ task process() void {
   if (last_col){
     // memcpy streaming out 3 wavelets
     const out = @get_dsd(fabout_dsd,
-              .{.fabric_color = MEMCPYD2H_DATA_1, .extent = 3, .output_queue = @get_output_queue(1) });
+              .{.fabric_color = sys_mod.MEMCPYD2H_1, .extent = 3, .output_queue = @get_output_queue(1) });
     @mov32(out, mem_dsd, .{ .async = true, .activate = recv });
   }else{
     // send 3 wavelets to the east neighbor
@@ -88,15 +84,14 @@ task process() void {
 }
 
 comptime {
-  @bind_task(recv, recv_task_color);
-
-  @bind_task(process, process_task_color);
+  @bind_local_task(recv, recv_task_id);
+  @bind_local_task(process, process_task_id);
 
   @block(in_color);
 }
 
 fn f_mandelbrot() void {
-  @activate(recv_task_color);
+  @activate(recv_task_id);
 
   // kick and run: trigger main_color asynchronously,
   // RPC continues while mandelbrot is still running
@@ -107,5 +102,5 @@ fn f_mandelbrot() void {
 comptime{
   @export_symbol(ptr_packet, "packet");
   @export_symbol(f_mandelbrot);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

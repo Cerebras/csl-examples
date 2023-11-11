@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,17 @@
 
 const common = @import_module("common.csl");
 
-param pe_x: u32;
-param pe_y: u32;
+param memcpy_params: comptime_struct;
 
-param in_color: color;
+// Colors
+param in_color:  color;
 param out_color: color;
 
-const main_color: color = @get_color(8);
+// Task IDs
+const main_task_id: local_task_id = @get_local_task_id(8);
+
+param pe_x: u32;
+param pe_y: u32;
 
 param image_height: u32;
 param image_width: u32;
@@ -35,15 +39,8 @@ param rows_per_pe: u32;
 
 param last_col: bool;
 
-param memcpy_params: comptime_struct;
-param MEMCPYD2H_DATA_1: color;
-param LAUNCH: color;
-
 // input/output queue ID = 0 is reserved for memcpy module
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 const first_row = pe_y * rows_per_pe;
 const last_row = (pe_y + 1) * rows_per_pe;
@@ -88,13 +85,13 @@ task send() void {
 }
 
 comptime {
-  @bind_task(send, main_color);
+  @bind_local_task(send, main_task_id);
 }
 
 fn f_mandelbrot() void {
-  @activate(main_color);
+  @activate(main_task_id);
 
-  // kick and run: trigger main_color asynchronously,
+  // kick and run: trigger main_task_id asynchronously,
   // RPC continues while mandelbrot is still running
   // WARNING: the user must unblock cmd color for every PE
   sys_mod.unblock_cmd_stream();
@@ -103,5 +100,5 @@ fn f_mandelbrot() void {
 comptime{
   @export_symbol(ptr_packet, "packet");
   @export_symbol(f_mandelbrot);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

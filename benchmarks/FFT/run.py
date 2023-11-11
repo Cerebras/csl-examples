@@ -1,4 +1,4 @@
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,7 +50,6 @@ def arguments():
       help="Compute the inverse FFT.",
       default=False,
   )
-  parser.add_argument("--fabric-offsets", help="column,row of kernel offset")
   parser.add_argument("--cmaddr", help="IP:port for CS system")
   return parser.parse_args()
 
@@ -72,9 +71,6 @@ assert (DIM == 1 and Nz >= 2) or (DIM == 2 and Nz >= 4), \
 assert Nz & (Nz-1) == 0, "Nz must be a power of 2"
 assert FP in [1, 2]
 assert FP == 1 or DIM == 1, "2D does not support FP2"
-
-offset_col, offset_row = map(int, args.fabric_offsets.split(','))
-fabric_offsets = offset_col, offset_row
 
 width = 1 if DIM == 1 else Nz
 is_2D = (width > 1)

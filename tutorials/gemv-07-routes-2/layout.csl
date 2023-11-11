@@ -1,0 +1,76 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// total matrix dimensions
+param M: i16;
+param N: i16;
+
+// Colors
+const ax_color: color = @get_color(0); // sends/recvs partial result Ax EAST
+const x_color:  color = @get_color(1); // sends/recvs elems x
+const LAUNCH:   color = @get_color(8); // Color used by memcpy for kernel launch
+
+// Task IDs
+const recv_x_task_id: data_task_id  = @get_data_task_id(x_color); // Task ID for WTT
+const exit_task_id:   local_task_id = @get_local_task_id(9);      // Task ID used by local task
+const reduce_task_id: local_task_id = @get_local_task_id(10);     // Task ID used by local task
+
+// This example uses 2x2 PEs
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = 2,
+  .height = 2,
+  .LAUNCH = LAUNCH
+});
+
+layout {
+  // PE coordinates are (column, row)
+  @set_rectangle(2, 2);
+
+  for (@range(i16, 2)) |pe_x| {
+    for (@range(i16, 2)) |pe_y| {
+      @set_tile_code(pe_x, pe_y, "pe_program.csl", .{
+        .memcpy_params = memcpy.get_params(pe_x),
+        .M_per_PE = M / 2,
+        .N_per_PE = N / 2,
+        .ax_color = ax_color,
+        .x_color = x_color,
+        .recv_x_task_id = recv_x_task_id,
+        .exit_task_id = exit_task_id,
+        .reduce_task_id = reduce_task_id
+      });
+    }
+  }
+
+  // Top left PE (0, 0)
+  @set_color_config(0, 0, ax_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});
+  @set_color_config(0, 0, x_color,  .{.routes = .{ .rx = .{RAMP}, .tx = .{RAMP, SOUTH} }});
+
+  // Top right PE (1, 0)
+  @set_color_config(1, 0, ax_color, .{.routes = .{ .rx = .{WEST},  .tx = .{RAMP} }});
+  @set_color_config(1, 0, x_color,  .{.routes = .{ .rx = .{RAMP}, .tx = .{RAMP, SOUTH} }});
+
+  // Bottom left PE (0, 1)
+  @set_color_config(0, 1, ax_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST} }});
+  @set_color_config(0, 1, x_color,  .{.routes = .{ .rx = .{NORTH}, .tx = .{RAMP} }});
+
+  // Bottom right PE (1, 1)
+  @set_color_config(1, 1, ax_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP} }});
+  @set_color_config(1, 1, x_color,  .{.routes = .{ .rx = .{NORTH}, .tx = .{RAMP} }});
+
+  // export symbol names
+  @export_name("A", [*]f32, true);
+  @export_name("x", [*]f32, true);
+  @export_name("y", [*]f32, true);
+  @export_name("compute", fn()void);
+}

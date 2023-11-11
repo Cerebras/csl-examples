@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-const EXIT: color = @get_color(0);
-
-param LAUNCH: color;
 param memcpyParams: comptime_struct;
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-    }));
+
+// Task IDs
+const EXIT: local_task_id = @get_local_task_id(10);
+
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // Problem size
 param N: i16;
@@ -29,13 +28,11 @@ param tensor_type: type;
 // Import the code in the file `fft.csl` as the module `mod`, and
 // instantiate the module's `N` parameter.
 
-
 var X = @zeros([N*ELEM_SIZE]tensor_type);
 var f = @zeros([N]tensor_type);
 
-
-var ptr_X : [*]tensor_type = &X;
-var ptr_f : [*]tensor_type = &f;
+var ptr_X: [*]tensor_type = &X;
+var ptr_f: [*]tensor_type = &f;
 
 const mod = @import_module("fft.csl", .{ .N = N, .ARRAY_LEN = N*ELEM_SIZE, .X=&X, .FP=FP, .tensor_type=tensor_type});
 
@@ -50,14 +47,14 @@ fn f_ifft() void {
 }
 
 task f_exit() void {
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
+  // the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
 }
 comptime {
-  @bind_task(f_exit, EXIT);
+  @bind_local_task(f_exit, EXIT);
   @export_symbol(ptr_X, "X");
   @export_symbol(ptr_f, "f");
   @export_symbol(f_fft);
   @export_symbol(f_ifft);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }
