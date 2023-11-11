@@ -7,7 +7,7 @@ The following are the release notes for the CSL Examples repository,
 Version 1.0.0
 -------------
 
-- The examples are improved and updated to comply with the SDK version 0.9.0.
+- The examples are improved and updated to comply with the SDK version 1.0.0.
 
 - Several more tutorials in the GEMV series have been introduced.
 
