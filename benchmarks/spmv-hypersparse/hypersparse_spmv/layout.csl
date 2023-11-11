@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 
 param colors:[6]color;
-param entrypoints:[14]color;
+param entrypoints:[14]local_task_id;
 param width : i16 ;   // width of the core
 param height: i16 ;   // height of the core
 
@@ -29,20 +29,20 @@ const c6: color = colors[4];
 const c7: color = colors[5];
 
 // entrypoints
-const init: color = entrypoints[0];
-const compute_north: color = entrypoints[1];
-const compute_south: color = entrypoints[2];
-const tx_north: color = entrypoints[3];
-const tx_south: color = entrypoints[4];
-const rx_north: color = entrypoints[5];
-const rx_south: color = entrypoints[6];
-const rx_east: color = entrypoints[7];
-const rx_west: color = entrypoints[8];
-const tx_west: color = entrypoints[9];
-const tx_east: color = entrypoints[10];
-const compute_local: color = entrypoints[11];
-const curr_rx_north_done: color = entrypoints[12];
-const curr_rx_south_done: color = entrypoints[13];
+const init: local_task_id = entrypoints[0];
+const compute_north: local_task_id = entrypoints[1];
+const compute_south: local_task_id = entrypoints[2];
+const tx_north: local_task_id = entrypoints[3];
+const tx_south: local_task_id = entrypoints[4];
+const rx_north: local_task_id = entrypoints[5];
+const rx_south: local_task_id = entrypoints[6];
+const rx_east: local_task_id = entrypoints[7];
+const rx_west: local_task_id = entrypoints[8];
+const tx_west: local_task_id = entrypoints[9];
+const tx_east: local_task_id = entrypoints[10];
+const compute_local: local_task_id = entrypoints[11];
+const curr_rx_north_done: local_task_id = entrypoints[12];
+const curr_rx_south_done: local_task_id = entrypoints[13];
 
 // invariant parameters (same on every PE)
 const invariants = .{

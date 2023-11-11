@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,6 @@ param memcpyParams: comptime_struct;
 param spmvParams: comptime_struct;
 
 param reduceParams: comptime_struct;
-
-param LAUNCH: color; // must less than 24
 
 // parameters
 param nrows: u32;   // total number of matrix rows
@@ -58,9 +56,7 @@ var dot = @zeros([1]f32);
 
 const timestamp = @import_module("<time>");
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpyParams, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // input_queues cannot overlap with output_queues
 const spmv_mod = @import_module( "hypersparse_spmv/pe.csl", @concat_structs(spmvParams, .{
@@ -217,5 +213,5 @@ comptime{
     @export_symbol(f_spmv);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
-    @rpc(LAUNCH);
+    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

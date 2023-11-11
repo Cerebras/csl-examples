@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import json
 import struct
 import numpy as np
 
-from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
+from cerebras.sdk.sdk_utils import memcpy_view, input_array_to_u32
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder # pylint: disable=no-name-in-module
 
@@ -83,7 +83,7 @@ print("streaming H2D: the kernel computes and sends out the result when H2D is d
 #    sentinel = None
 # 2) upper 16-bit is the index of the array:
 #    sentinel is Not None
-tensors_u32 = runtime_utils.input_array_to_u32(tensors, 1, tensors.size)
+tensors_u32 = input_array_to_u32(tensors, 1, tensors.size)
 runner.memcpy_h2d(MEMCPYH2D_DATA_1, tensors_u32, 0, 0, 1, 1, tensors_u32.size,\
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
@@ -93,7 +93,7 @@ out_tensors_u32 = np.zeros(16, np.uint32)
 runner.memcpy_d2h(out_tensors_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, 16, \
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 # remove upper 16-bit of each u32
-out_tensors = runtime_utils.output_array_from_u32(out_tensors_u32, tensors.dtype)
+out_tensors = memcpy_view(out_tensors_u32, tensors.dtype)
 
 runner.stop()
 

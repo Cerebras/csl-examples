@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,15 +15,9 @@
 // Struct containing parameters for memcpy layout
 param memcpy_params: comptime_struct;
 
-// Color used by memcpy for RPC mechanism
-const LAUNCH: color = @get_color(8);
-
 // memcpy module provides infrastructure for copying data
 // and launching functions from the host
-const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-  // Color LAUNCH will be used for memcpy's RPC mechanism
-  .LAUNCH = LAUNCH
-}));
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 // Constants definining dimensions of our matrix
 const M: i16 = 4;
@@ -88,5 +82,5 @@ comptime {
   @export_symbol(init_and_compute);
 
   // Create RPC server using color LAUNCH
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

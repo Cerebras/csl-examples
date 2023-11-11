@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ from ic import computeGaussianSource
 import numpy as np
 from cmd_parser import parse_args
 
-from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder # pylint: disable=no-name-in-module
 
@@ -254,66 +253,52 @@ def main():
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   memcpy_order = MemcpyOrder.ROW_MAJOR
   dirname = f"{name}_code"
-  simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+  runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
-  symbol_vp = simulator.get_id("vp")
-  symbol_source = simulator.get_id("source")
-  symbol_maxmin_time = simulator.get_id("maxmin_time")
-  symbol_zout = simulator.get_id("zout")
-  print(f"symbol_vp = {symbol_vp}")
-  print(f"symbol_source = {symbol_source}")
-  print(f"symbol_maxmin_time = {symbol_maxmin_time}")
-  print(f"symbol_zout = {symbol_zout}")
+  sym_vp = runner.get_id("vp")
+  sym_source = runner.get_id("source")
+  sym_maxmin_time = runner.get_id("maxmin_time")
+  sym_zout = runner.get_id("zout")
 
-  simulator.load()
-  simulator.run()
+  runner.load()
+  runner.run()
 
   start = time.time()
 #
 # Step 3: The user has to prepare the sequence of H2D/D2H/RPC
 #
   # H2D vp[h][w][zDim]
-  iportmap_vp = f"{{ vp[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] \
-    -> [PE[i, j] -> index[k]] }}"
-  # H2D source[h][w][zDim]
-  iportmap_source = f"{{ source[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] \
-    -> [PE[i, j] -> index[k]] }}"
+  # vp is h-by-w-by-zDim in row-major
+  runner.memcpy_h2d(sym_vp, vp.ravel(), 0, 0, width, height, zDim,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
 
-  # use the runtime_utils library to calculate memcpy args and shuffle data
-  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_vp, vp)
-  simulator.memcpy_h2d(symbol_vp, data, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  (px, py, w, h, l, data) = runtime_utils.convert_input_tensor(iportmap_source, source_all)
-  simulator.memcpy_h2d(symbol_source, data, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
+  # H2D source[h][w][zDim]
+  runner.memcpy_h2d(sym_source, source_all.ravel(), 0, 0, width, height, zDim,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
 
   # time marching: call f_activate_comp() to set num iters and start computation
-  simulator.call("f_activate_comp", [cast_uint32(iterations)], nonblock=False)
+  runner.launch("f_activate_comp", cast_uint32(iterations), nonblock=False)
 
-  # D2H [h][w][5]
-  oportmap1 = f"{{ maxmin_time[j=0:{height-1}][i=0:{width-1}][k=0:{5-1}] \
-    -> [PE[i, j] -> index[k]] }}"
-  # use the runtime_utils library to calculate memcpy args and manage output data
-  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap1, np.float32)
-  simulator.memcpy_d2h(data, symbol_maxmin_time, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  maxmin_time_hwl = runtime_utils.format_output_tensor(oportmap1, np.float32, data)
+  # D2H [h][w][6]
+  maxmin_time_1d = np.zeros(height*width*6, np.float32)
+  runner.memcpy_d2h(maxmin_time_1d, sym_maxmin_time, 0, 0, width, height, 6,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
+  maxmin_time_hwl = maxmin_time_1d.reshape(height, width, 6)
 
   # prepare zout: call f_prepare_zout()
-  simulator.call("f_prepare_zout", [], nonblock=False)
+  runner.launch("f_prepare_zout", nonblock=False)
 
   # D2H [h][w][zDim]
-  oportmap2 = f"{{ z[j=0:{height-1}][i=0:{width-1}][k=0:{zDim-1}] -> [PE[i, j] -> index[k]] }}"
-  (px, py, w, h, l, data) = runtime_utils.prepare_output_tensor(oportmap2, np.float32)
-  simulator.memcpy_d2h(data, symbol_zout, px, py, w, h, l,
-                       streaming=False, data_type=memcpy_dtype,
-                       order=memcpy_order, nonblock=False)
-  z_hwl = runtime_utils.format_output_tensor(oportmap2, np.float32, data)
+  z_1d = np.zeros(height*width*zDim, np.float32)
+  runner.memcpy_d2h(z_1d, sym_zout, 0, 0, width, height, zDim,
+                    streaming=False, data_type=memcpy_dtype,
+                    order=memcpy_order, nonblock=False)
+  z_hwl = z_1d.reshape(height, width, zDim)
 
-  simulator.stop()
+  runner.stop()
   end = time.time()
 
   print(f"Run done in {end-start}s")

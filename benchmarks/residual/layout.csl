@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,32 +39,32 @@ param LAUNCH_ID: i16;
 //    A_global is M-by-N
 //    x_global is N-by-1
 //    y_global is M-by-1
-param LOCAL_OUT_SZ : i16;
-param LOCAL_IN_SZ  : i16;
+param LOCAL_OUT_SZ: i16;
+param LOCAL_IN_SZ: i16;
 
 param width: i16;
 param height: i16;
 
-const LAUNCH : color = @get_color(LAUNCH_ID);
+// Colors
+const LAUNCH:  color = @get_color(LAUNCH_ID);
 
-const RXACT_X: color  = @get_color(8) ;  // receive x
-const PSUM: color     = @get_color(9) ;  // row reduction
-const NRM: color      = @get_color(10) ; // column reduction
+const RXACT_X: color = @get_color(8);  // receive x
+const PSUM:    color = @get_color(9);  // row reduction
+const NRM:     color = @get_color(10); // column reduction
+const NONE:    color = @get_color(15); // NONE is not routed nor used as entrypt
+                                       // compiler emits an error for un-initialized parameters
+                                       // binding a color to NONE to avoid compilation error
 
-// local tasks
-const COMP: color     = @get_color(12) ;
-const REDUCE: color   = @get_color(13) ;
-const DONE: color     = @get_color(14) ;
+// Task IDs
+const COMP:   local_task_id = @get_local_task_id(12);
+const REDUCE: local_task_id = @get_local_task_id(13);
+const DONE:   local_task_id = @get_local_task_id(14);
+const EXIT:   local_task_id = @get_local_task_id(17);
 
-// neither routing color nor local task
-const NONE: color     = @get_color(15) ; // NONE is don't care (neither routing color nor entrypoint)
-                             // the compiler emits an error for un-initialized colors or parameters
-                             // binding a non-routing local color to NONE to avoid the compilation error
-const EXIT: color     = @get_color(17);
-
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
-    .height = height
+    .height = height,
+    .LAUNCH = LAUNCH
     });
 
 
@@ -85,7 +85,6 @@ layout{
         .DONE=DONE,
         .LOCAL_OUT_SZ=LOCAL_OUT_SZ,
         .LOCAL_IN_SZ=LOCAL_IN_SZ,
-        .LAUNCH = LAUNCH,
         .EXIT = EXIT
     };
 

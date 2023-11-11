@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,22 +16,17 @@
 
 param memcpy_params: comptime_struct;
 
-param LAUNCH: color;
-param MEMCPYH2D_DATA_1: color; // 1st row receives x
-param MEMCPYH2D_DATA_2: color; // 1st column receives b
-param MEMCPYD2H_DATA_1: color; // last column sends out y
-
+// Colors
 param x_in: color; // receive x from north except 1st row
                    // the data is broadcasted by 1st row
+param send: color; // checkerboard color, sends result EAST
+param recv: color; // checkerboard color, recvs result from WEST except 1st column
 
-// checkerboard color for sending result to EAST
-param send: color;
-
-// checkerboard color for receiving result from WEST except 1st column
-param recv: color;
-
-// entrypoint to perform chain reduction when y = A*x is done
-param C_REDUCE: color;
+// Task IDs
+param REDUCE: local_task_id; // entrypoint to perform chain reduction when y = A*x is done
+const h2d_x_task_id: data_task_id = @get_data_task_id(sys_mod.MEMCPYH2D_1);
+const h2d_b_task_id: data_task_id = @get_data_task_id(sys_mod.MEMCPYH2D_2);
+const x_in_task_id:  data_task_id = @get_data_task_id(x_in);
 
 // dims of A, X, B chunks on PE
 param A_local_dim_x : i16;
@@ -46,12 +41,7 @@ param B_local_dim_y : i16;
 param last_column: bool;
 
 // memcpy reserves input queue 0 and output queue 0
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-     .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
-     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 
 // A is A_local_dim_x-by-A_local_dim_y in row-major
@@ -80,7 +70,7 @@ task fmac_task(wlet_data : f16, idx : u16) void {
   num_recv_x += 1;
   // trigger chain reduction when last xj is received and y = A*x is done
   if (num_recv_x >= X_local_dim_x){
-    @activate(C_REDUCE);
+    @activate(REDUCE);
   }
 }
 
@@ -96,7 +86,7 @@ task fmac_task(wlet_data : f16, idx : u16) void {
 // The host waits until D2H receives y --> y = A*x is done
 task reduce_task() void {
   const dsd_out = @get_dsd(fabout_dsd, .{
-    .fabric_color = if (last_column) MEMCPYD2H_DATA_1 else send,
+    .fabric_color = if (last_column) sys_mod.MEMCPYD2H_1 else send,
     .extent = B_local_dim_x,
     .output_queue = @get_output_queue(2)
   });
@@ -104,7 +94,7 @@ task reduce_task() void {
 }
 
 comptime {
-  @bind_task(fmac_task, x_in);
+  @bind_data_task(fmac_task, x_in_task_id);
 
   // recv is blocked because microthread is used
   @block(recv);
@@ -122,9 +112,9 @@ const fab_trans_x_wdsd = @get_dsd(fabout_dsd, .{
 // 1st row receives x from MEMCPYH2D_DATA_1, then
 // forwards data to the whole column, including itself, via color "x_in"
 task wtt_memcpyh2d_x( data : u32 ) void {
-    @block(MEMCPYH2D_DATA_1);
+    @block(sys_mod.MEMCPYH2D_1);
     buf[0] = data;
-    @mov32(fab_trans_x_wdsd, mem_buf_dsd, .{.async=true, .unblock=MEMCPYH2D_DATA_1} );
+    @mov32(fab_trans_x_wdsd, mem_buf_dsd, .{.async=true, .unblock=h2d_x_task_id });
 }
 
 const fab_trans_b_wdsd = @get_dsd(fabout_dsd, .{
@@ -136,21 +126,22 @@ const fab_trans_b_wdsd = @get_dsd(fabout_dsd, .{
 // 1st column receives b from MEMCPYH2D_DATA_2, then
 // forwards data to itself via color "recv"
 task wtt_memcpyh2d_b( data : u32 ) void {
-    @block(MEMCPYH2D_DATA_2);
+    @block(sys_mod.MEMCPYH2D_2);
     buf[0] = data;
-    @mov32(fab_trans_b_wdsd, mem_buf_dsd, .{.async=true, .unblock=MEMCPYH2D_DATA_2} );
+    @mov32(fab_trans_b_wdsd, mem_buf_dsd, .{.async=true, .unblock=h2d_b_task_id });
 }
 
 comptime{
   @comptime_assert(X_local_dim_y == 1);
   @comptime_assert(B_local_dim_y == 1);
 
-  @bind_task(wtt_memcpyh2d_x, MEMCPYH2D_DATA_1);
-  @bind_task(wtt_memcpyh2d_b, MEMCPYH2D_DATA_2);
-  @bind_task(reduce_task, C_REDUCE);
+  @bind_data_task(wtt_memcpyh2d_x, h2d_x_task_id);
+  @bind_data_task(wtt_memcpyh2d_b, h2d_b_task_id);
+
+  @bind_local_task(reduce_task, REDUCE);
 }
 
 comptime{
   @export_symbol(ptr_A, "A");
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Colors
 param channel: color;
-param dataFin: color;
-param ctrlFin: color;
+
+// Task IDs
+param dataFin_task_id: local_task_id;
+param ctrlFin_task_id: local_task_id;
 
 param pattern: u16;
 param queueId: u16;
@@ -108,7 +111,7 @@ task dataFinTask() void {
     .tensor_access = |i|{1} -> ctrl0[i]
   });
 
-  @mov32(fabOutCtrlDsd, ctrlDsd, .{ .async = true, .activate = ctrlFinTask });
+  @mov32(fabOutCtrlDsd, ctrlDsd, .{ .async = true, .activate = ctrlFin_task_id });
 }
 
 // This function is activated after we've finished (asynchronously) sending the
@@ -130,8 +133,8 @@ task ctrlFinTask() void {
 }
 
 comptime {
-  @bind_task(dataFinTask, dataFin);
-  @bind_task(ctrlFinTask, ctrlFin);
+  @bind_local_task(dataFinTask, dataFin_task_id);
+  @bind_local_task(ctrlFinTask, ctrlFin_task_id);
 }
 
 // Send data to the appropriate neighbor.  This function accepts a `offset`
@@ -143,7 +146,7 @@ fn send(iterationCount: u32, offset: i16) void {
     .output_queue = @get_output_queue(queueId),
   });
 
-  const props = .{ .async = true, .activate = dataFinTask };
+  const props = .{ .async = true, .activate = dataFin_task_id };
 
   if (iterationCount & 1 == 0) {
     const __memDsd = @get_dsd(mem1d_dsd, .{

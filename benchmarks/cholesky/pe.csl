@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// // This benchmark implements right-looking Cholesky factorization
+// This benchmark implements right-looking Cholesky factorization
 
 param memcpy_params: comptime_struct;
 param px: i16;
 param py: i16;
 param Nt: i16;
+
+// Colors
 param row_color: color;
 param col_color: color;
-param LAUNCH: color;
 
-const P:i16 = @as(i16, @get_rectangle().height);
+// Task IDs
+param main_task_id: local_task_id;
+param cont_task_id: local_task_id;
 
-const main_color = @get_color(17);
-const cont_color = @get_color(18);
+const P: i16 = @as(i16, @get_rectangle().height);
 
 const math = @import_module("<math>");
 
-const sys_mod = @import_module( "<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .LAUNCH = LAUNCH
-      }));
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 // Memory buffers
 // tile is Nt-by-Nt in row-major order
@@ -94,11 +94,11 @@ task main() void {
     // If we're the top left PE for the current fringe, we send values down
     // our column
     if (px < P - 1) {
-      @mov32(col_out, tile_dsd, .{ .async = true, .activate = cont_color });
+      @mov32(col_out, tile_dsd, .{ .async = true, .activate = cont_task_id });
     } else {
       // Unless we don't even have a column because we're the bottom-right
       // PE
-      @activate(cont_color);
+      @activate(cont_task_id);
     }
 
     var left_col_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i*Nt + 0] });
@@ -115,17 +115,17 @@ task main() void {
 
   } else if (px == P_left) {
     // Left edge of the current fringe
-    @mov32(col_buf_dsd, col_in, .{ .async = true, .activate = cont_color });
+    @mov32(col_buf_dsd, col_in, .{ .async = true, .activate = cont_task_id });
 
   } else if (px == py) {
     // Non-fringe diagonal
-    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_color });
+    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_task_id });
 
   } else {
     // Non-fringe interior block
-    @block(cont_color);
-    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_color });
-    @mov32(col_buf_dsd, col_in, .{ .async = true, .unblock = cont_color });
+    @block(cont_task_id);
+    @mov32(row_buf_dsd, row_in, .{ .async = true, .activate = cont_task_id });
+    @mov32(col_buf_dsd, col_in, .{ .async = true, .unblock = cont_task_id });
   }
 }
 
@@ -135,7 +135,7 @@ task cont() void {
   if (px == P_left and py == P_left) {
 
     tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
-    @activate(main_color);
+    @activate(main_task_id);
 
   } else if (px == P_left) {
 
@@ -158,7 +158,7 @@ task cont() void {
     // }
 
 
-    @mov32(row_out, tile_dsd, .{ .async = true, .activate = main_color });
+    @mov32(row_out, tile_dsd, .{ .async = true, .activate = main_task_id });
     tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
 
   } else if (px == py) {
@@ -174,11 +174,11 @@ task cont() void {
     if (py != P - 1) {
       // If we're on the diagonal, our job is to take values we received along
       // our row and send them down our column
-      @mov32(col_out, row_buf_dsd, .{ .async = true, .activate = main_color });
+      @mov32(col_out, row_buf_dsd, .{ .async = true, .activate = main_task_id });
     } else {
       // Unless we're the bottom-right corner PE... in which case we don't
       // have a column to send values down!
-      @activate(main_color);
+      @activate(main_task_id);
     }
 
   } else {
@@ -189,7 +189,7 @@ task cont() void {
       tile_dsd = @increment_dsd_offset(tile_dsd, 1, f32);
     }
     tile_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> tile[i*Nt + 0] });
-    @activate(main_color);
+    @activate(main_task_id);
   }
 
   // Next time we go to the main task, we've moved up an iteration
@@ -197,24 +197,19 @@ task cont() void {
 }
 
 fn f_chol() void {
-  @activate(main_color);
+  @activate(main_task_id);
 }
 
 comptime {
-
   @comptime_assert(px <= py);
 
-  @bind_task(main, main_color);
-
-  @bind_task(cont, cont_color);
+  @bind_local_task(main, main_task_id);
+  @bind_local_task(cont, cont_task_id);
 
   @block(col_color);
   @block(row_color);
-}
 
-comptime{
   @export_symbol(ptr_tile, "tile");
-
   @export_symbol(f_chol);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

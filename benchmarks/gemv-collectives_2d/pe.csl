@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
-
-// The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
-// See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
-const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
-const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
 
 // Size of our local tile of `A`
 param Mt: u16; // Height of local matrix, or num rows per PE
 param Nt: u16; // Width of local matrix, or num cols per PE
 
-param LAUNCH : color;  // a routable color for RPC
-param EXIT: color;     // entrypoint to leave RPC
+// Task IDs
+param EXIT:                     local_task_id; // entrypoint to leave RPC
+param scatter_x_task_id:        local_task_id;
+param broadcast_x_down_task_id: local_task_id;
+param compute_task_id:          local_task_id;
+param gather_result_task_id:    local_task_id;
 
-param memcpy_params: comptime_struct;
-const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .LAUNCH = LAUNCH
-    }));
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
+// See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
+const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
 
 // Size of rectangle of PEs on which our kernel runs
 const Pw = @get_rectangle().width;  // Num cols of PEs in kernel
@@ -72,11 +74,6 @@ var ptr_y : [*]f32 = &final_result;
 var px: u16;
 var py: u16;
 
-const scatter_x_color = @get_color(10);
-const broadcast_x_down_color = @get_color(11);
-const compute_color = @get_color(12);
-const gather_result_color = @get_color(13);
-
 // Entrypoint into kernel
 // PE (0,0) scatters `b` into tiles across the left column of PEs
 fn main() void {
@@ -87,9 +84,9 @@ fn main() void {
 
   if (px == 0) {
     mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
-                  Mt, scatter_x_color);
+                  Mt, scatter_x_task_id);
   } else {
-    @activate(scatter_x_color);
+    @activate(scatter_x_task_id);
   }
 }
 
@@ -97,15 +94,15 @@ fn main() void {
 task scatter_x() void {
   if (py == 0) {
     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  Nt, broadcast_x_down_color);
+                  Nt, broadcast_x_down_task_id);
   } else {
-    @activate(broadcast_x_down_color);
+    @activate(broadcast_x_down_task_id);
   }
 }
 
 // Broadcast tiles of `x` down the columns of PEs
 task broadcast_x_down() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), Nt, compute_color);
+  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), Nt, compute_task_id);
 }
 
 // Compute the product of the local `x_tile` with the local `A_tile`,
@@ -123,7 +120,7 @@ task compute() void {
   }
 
   mpi_x.reduce_fadds(Pw - 1, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
-                     Mt, gather_result_color);
+                     Mt, gather_result_task_id);
 }
 
 // Gather the product into the bottom right PE
@@ -137,16 +134,16 @@ task f_exit() void {
 }
 
 comptime {
-  @bind_task(scatter_x, scatter_x_color);
-  @bind_task(broadcast_x_down, broadcast_x_down_color);
-  @bind_task(compute, compute_color);
-  @bind_task(gather_result, gather_result_color);
-  @bind_task(f_exit, EXIT);
+  @bind_local_task(scatter_x, scatter_x_task_id);
+  @bind_local_task(broadcast_x_down, broadcast_x_down_task_id);
+  @bind_local_task(compute, compute_task_id);
+  @bind_local_task(gather_result, gather_result_task_id);
+  @bind_local_task(f_exit, EXIT);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
   @export_symbol(ptr_b, "b");
   @export_symbol(ptr_y, "y");
   @export_symbol(main);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

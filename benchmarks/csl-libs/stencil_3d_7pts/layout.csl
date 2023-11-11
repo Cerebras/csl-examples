@@ -1,0 +1,120 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param colors:[8]color;
+param entrypoints:[3]local_task_id;
+param width : i16 ;   // width of the core
+param height: i16 ;   // height of the core
+
+const C0 : color = colors[0];
+const C1 : color = colors[1];
+const C2 : color = colors[2];
+const C3 : color = colors[3];
+const C4 : color = colors[4];
+const C5 : color = colors[5];
+const C6 : color = colors[6];
+const C7 : color = colors[7];
+
+// entrypoints of sync module
+const SEND: local_task_id = entrypoints[0];
+const RECV: local_task_id = entrypoints[1];
+const COMM: local_task_id = entrypoints[2];
+
+fn get_params(px:i16, py:i16) comptime_struct {
+
+    var first_py: bool = (0 == py);
+    var last_py: bool = ((height-1) == py);
+    var is_py_even: bool = (0 == (py % 2));
+
+    var first_px: bool = (0 == px);
+    var last_px: bool = ((width-1) == px);
+    var is_px_even: bool = (0 == (px % 2));
+
+    // C0, C1:recv_west, send_east
+    //         C0     C1     C0     C1     C0
+    // West P0 --> P1 --> P2 --> P3 --> P4 --> P5 East
+    //
+    var c_recv_west: color = C1;
+    var c_send_east: color = C0;
+    if (is_px_even){
+        c_recv_west = C1;
+        c_send_east = C0;
+    }else{
+        c_recv_west = C0;
+        c_send_east = C1;
+    }
+
+    // C2, C3: recv_east, send_west
+    //          C2     C3     C2     C3     C2
+    // West P0 <-- P1 <-- P2 <-- P3 <-- P4 <-- P5 East
+    //
+    var c_recv_east: color = C2;
+    var c_send_west: color = C3;
+    if (is_px_even){
+        c_recv_east = C2;
+        c_send_west = C3;
+    }else{
+        c_recv_east = C3;
+        c_send_west = C2;
+    }
+
+    // C4, C5: recv_south, send_north
+    //           C4     C5     C4     C5     C4
+    // North P0 <-- P1 <-- P2 <-- P3 <-- P4 <-- P5 south
+    //
+    var c_recv_south: color = C4;
+    var c_send_north: color = C5;
+    if (is_py_even){
+        c_recv_south = C4;
+        c_send_north = C5;
+    }else{
+        c_recv_south = C5;
+        c_send_north = C4;
+    }
+
+    // C6, C7: recv_north, send_south
+    //           C6     C7     C6     C7     C6
+    // North P0 --> P1 --> P2 --> P3 --> P4 --> P5 south
+    //
+    var c_recv_north: color = C7;
+    var c_send_south: color = C6;
+    if (is_py_even){
+        c_recv_north = C7;
+        c_send_south = C6;
+    }else{
+        c_recv_north = C6;
+        c_send_south = C7;
+    }
+
+    return .{
+        .c_recv_west = c_recv_west,
+        .c_send_east = c_send_east,
+        .c_recv_east = c_recv_east,
+        .c_send_west = c_send_west,
+        .c_recv_south = c_recv_south,
+        .c_send_north = c_send_north,
+        .c_recv_north = c_recv_north,
+        .c_send_south = c_send_south,
+
+        .SEND = SEND,
+        .RECV = RECV,
+        .COMM = COMM,
+
+        .first_px = first_px,
+        .last_px = last_px,
+        .first_py = first_py,
+        .last_py = last_py,
+    };
+}

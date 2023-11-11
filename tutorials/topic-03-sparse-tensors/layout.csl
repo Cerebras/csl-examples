@@ -1,0 +1,55 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// color/ task ID map
+//
+//  ID var                ID var         ID var                ID var
+//   0 MEMCPY_H2D_DATA_1   9             18                    27 reserved (memcpy)
+//   1 MEMCPY_D2H_DATA_1  10             19                    28 reserved (memcpy)
+//   2 LAUNCH             11             20                    29 reserved
+//   3                    12             21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13             22 reserved (memcpy)  31 reserved
+//   5                    14             23 reserved (memcpy)  32
+//   6                    15             24                    33
+//   7                    16             25                    34
+//   8                    17             26                    35
+
+// IDs for memcpy streaming colors
+param MEMCPYH2D_DATA_1_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
+
+// Colors
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
+const LAUNCH: color = @get_color(2);
+
+// Task IDs
+const main_task_id: data_task_id = @get_data_task_id(MEMCPYH2D_DATA_1);
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = 1,
+    .height = 1,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+    .LAUNCH = LAUNCH,
+    });
+
+layout {
+  @set_rectangle(1, 1);
+
+  @set_tile_code(0, 0, "pe_program.csl",  .{
+    .memcpy_params = memcpy.get_params(0),
+    .main_task_id = main_task_id
+  });
+}

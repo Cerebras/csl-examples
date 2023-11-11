@@ -1,5 +1,3 @@
-.. _benchmark-conjugateGradient:
-
 Conjugate Gradient
 ==================
 

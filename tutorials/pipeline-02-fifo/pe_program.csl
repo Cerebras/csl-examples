@@ -1,0 +1,84 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; the top-level source file is code.csl.
+
+//
+// Introduce a fifo to buffer the data from H2D, so the H2D can
+// finish as long as size does not exceed the capacity of the fifo
+//
+// H2D --> fifo --> C1 --> addh() --> D2H
+//
+
+param size: i16;
+param main: u16;
+param C1: color;
+
+param memcpy_params: comptime_struct;
+
+const main_task_id: local_task_id = @get_local_task_id(main);
+
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+
+var fifo_buffer = @zeros([1024]i16);
+const fifo = @allocate_fifo(fifo_buffer);
+
+const infinite_length: u16 = 0x7fff;
+
+const in_dsd = @get_dsd(fabin_dsd, .{
+  .extent = infinite_length,
+  .fabric_color = sys_mod.MEMCPYH2D_1,
+  .input_queue = @get_input_queue(2)});
+
+const out_dsd = @get_dsd(fabout_dsd, .{
+  .extent = infinite_length,
+  .fabric_color = C1,
+  .output_queue = @get_output_queue(3)});
+
+const inDsd = @get_dsd(fabin_dsd, .{
+  .extent = size,
+  .fabric_color = C1,
+  .input_queue = @get_input_queue(1),
+});
+
+const outDsd = @get_dsd(fabout_dsd, .{
+  .extent = size,
+  .fabric_color = sys_mod.MEMCPYD2H_1,
+  .output_queue = @get_output_queue(1)
+});
+
+var buf = @zeros([1]i16);
+const one_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{size} -> buf[0] });
+
+task mainTask() void {
+
+  // Move from the fabric to the FIFO
+  @mov16(fifo, in_dsd, .{.async = true});
+
+  // Move from the FIFO to C1
+  @mov16(out_dsd, fifo, .{.async = true});
+
+  buf[0] = @as(i16, 1);
+  @add16(outDsd, inDsd, one_dsd, .{.async=true});
+}
+
+comptime {
+  // activate local task mainTask at startup
+  @bind_local_task(mainTask, main_task_id);
+  @activate(main_task_id);
+
+  // fifo sends out the data via C1 --> tx = RAMP
+  // add16 receives data via C1 --> rx = RAMP
+  @set_local_color_config(C1, .{.routes = .{.rx = .{RAMP}, .tx = .{RAMP}}});
+}

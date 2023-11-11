@@ -1,0 +1,88 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// color/ task ID map
+//
+//  ID var           ID var      ID var                ID var
+//   0 in_color       9 STARTUP  18                    27 reserved (memcpy)
+//   1 out_color     10          19                    28 reserved (memcpy)
+//   2               11          20                    29 reserved
+//   3 result_color  12          21 reserved (memcpy)  30 reserved (memcpy)
+//   4 H2D           13          22 reserved (memcpy)  31 reserved
+//   5 D2H           14          23 reserved (memcpy)  32
+//   6               15          24                    33
+//   7               16          25                    34
+//   8 main_task_id  17          26                    35
+//
+
+//  +------+------+------+
+//  | west | core | east |
+//  +------+------+------+
+
+// IDs for memcpy streaming colors
+param MEMCPYH2D_DATA_1_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
+
+param num_elements_to_process: i16;
+
+// Colors
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
+const in_color:         color = @get_color(0);
+const out_color:        color = @get_color(1);
+const result_color:     color = @get_color(3);
+
+// Task IDs
+const main_task_id:    local_task_id = @get_local_task_id(8);
+const STARTUP:         local_task_id = @get_local_task_id(9);
+const process_task_id: data_task_id  = @get_data_task_id(out_color);
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = 3,
+    .height = 1,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+    });
+
+
+layout {
+  @set_rectangle(3,1);
+
+  // west.csl has a H2D
+  const memcpy_params_0 = memcpy.get_params(0);
+  @set_tile_code(0, 0, "memcpyEdge/west.csl", .{
+    .memcpy_params = memcpy_params_0,
+    .USER_IN_1 = in_color,
+    .STARTUP = STARTUP
+  });
+
+  const memcpy_params_1 = memcpy.get_params(1);
+  @set_tile_code(1, 0, "buffer.csl", .{
+    .memcpy_params = memcpy_params_1,
+    .in_color = in_color,
+    .out_color = out_color,
+    .result_color = result_color,
+    .main_task_id = main_task_id,
+    .process_task_id = process_task_id,
+    .num_elements_to_process = num_elements_to_process
+  });
+
+  // east.csl only has a D2H
+  const memcpy_params_2 = memcpy.get_params(2);
+  @set_tile_code(2, 0, "memcpyEdge/east.csl", .{
+    .memcpy_params = memcpy_params_2,
+    .USER_OUT_1 = result_color,
+    .STARTUP = STARTUP
+  });
+}

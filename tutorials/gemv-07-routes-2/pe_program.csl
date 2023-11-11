@@ -1,0 +1,133 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+// Matrix dimensions
+param M_per_PE: i16;
+param N_per_PE: i16;
+
+// Colors
+param ax_color: color; // sends partial result Ax EAST
+param x_color:  color; // sends elems x SOUTH/ recvs elems x from NORTH
+
+// Task IDs
+param recv_x_task_id: data_task_id;  // Task ID for data task recv_x, consumes x_color wlts
+param exit_task_id:   local_task_id; // Task ID used by exit task to unblock cmd stream
+param reduce_task_id: local_task_id; // Task ID used by reduce task
+
+// memcpy module provides infrastructure for copying data
+// and launching functions from the host
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// layout module provides PE coordinates at runtime
+const layout_mod = @import_module("<layout>");
+
+
+// 48 kB of global memory contain A, x, b, y
+var A: [M_per_PE*N_per_PE]f32; // A is stored column major
+var x: [N_per_PE]f32;
+var y: [M_per_PE]f32;
+
+// DSDs for accessing A, x, y
+// A_dsd accesses column of A
+var A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_per_PE} -> A[i] });
+var x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_per_PE} -> x[i] });
+var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_per_PE} -> y[i] });
+
+// ptrs to A, x, b, y will be advertised as symbols to host
+var A_ptr: [*]f32 = &A;
+var x_ptr: [*]f32 = &x;
+var y_ptr: [*]f32 = &y;
+
+
+fn is_top_row() bool {
+  return (layout_mod.get_y_coord() == 0);
+}
+
+fn is_left_col() bool {
+  return (layout_mod.get_x_coord() == 0);
+}
+
+
+task reduce() void {
+  if (is_left_col()) {
+    const out_dsd = @get_dsd(fabout_dsd, .{
+                      .fabric_color = ax_color, .extent = M_per_PE,
+                      .output_queue = @get_output_queue(1)
+                    });
+    // After fmovs is done, activate exit_task to unblock cmd stream
+    @fmovs(out_dsd, y_dsd, .{ .async = true, .activate = exit_task_id });
+
+  } else {
+    const in_dsd = @get_dsd(fabin_dsd, .{
+                     .fabric_color = ax_color, .extent = M_per_PE,
+                     .input_queue = @get_input_queue(1)
+                   });
+    // After fadds is done, activate exit_task to unblock cmd stream
+    @fadds(y_dsd, y_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
+  }
+}
+
+
+// Use to keep track of # of invocations of recv_x task
+// when num_recv_x == N_per_PE, we are done receiving x elements
+var num_recv_x: i16 = 0;
+
+task recv_x(x_val: f32) void {
+  @fmacs(y_dsd, y_dsd, A_dsd, x_val);
+  A_dsd = @increment_dsd_offset(A_dsd, M_per_PE, f32);
+
+  num_recv_x += 1;
+  if (num_recv_x == N_per_PE) {
+    @activate(reduce_task_id);
+  }
+}
+
+
+// The top row sends x values along x_color to launch recv_x
+fn compute() void {
+  if (is_top_row()) {
+    const send_x_dsd = @get_dsd(fabout_dsd, .{
+                         .fabric_color = x_color, .extent = N_per_PE,
+                         .output_queue = @get_output_queue(2)
+                       });
+    @fmovs(send_x_dsd, x_dsd, .{ .async = true });
+  }
+}
+
+
+task exit_task() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+
+comptime {
+  // When exit_task_id is activated, exit_task will execute
+  @bind_local_task(exit_task, exit_task_id);
+
+  // recv_x is wavelet-triggered task (WTT)
+  // activated by receiving wavelets along color x_color,
+  // which corresponds to recv_x_task_id
+  @bind_data_task(recv_x, recv_x_task_id);
+
+  // reduce is local task activated by ID reduce_task_ID
+  @bind_local_task(reduce, reduce_task_id);
+
+  @export_symbol(A_ptr, "A");
+  @export_symbol(x_ptr, "x");
+  @export_symbol(y_ptr, "y");
+  @export_symbol(compute);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,7 +90,7 @@ from datetime import datetime
 from typing import Optional
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
-from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
+#from cerebras.sdk.debug.debug_util import debug_util
 
 from cmd_parser import parse_args
 
@@ -804,7 +804,7 @@ def main():
     # dump the device memory via debug tool
     if 0:
         print(f"time_ref_hwl = \n{time_ref_hwl}")
-        debug_mod = runtime_utils.debug_util(dirname, cmaddr=args.cmaddr)
+        debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
         for py in range(height):
             for px in range(width):
                 t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'time_ref_u16', np.uint16)

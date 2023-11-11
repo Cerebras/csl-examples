@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,12 @@
 param M: i16;
 param N: i16;
 
-const memcpy = @import_module("<memcpy_multi/get_params>", .{
+const LAUNCH: color = @get_color(8);
+
+const memcpy = @import_module("<memcpy/get_params>", .{
   .width = 1,
-  .height = 1
+  .height = 1,
+  .LAUNCH = LAUNCH
 });
 
 layout {

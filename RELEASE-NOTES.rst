@@ -4,6 +4,16 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 1.0.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 0.9.0.
+
+- Several more tutorials in the GEMV series have been introduced.
+
+- A tutorial series which builds up an increasingly complex
+  pipelined computation model have been introduced.
+
 Version 0.9.0
 -------------
 

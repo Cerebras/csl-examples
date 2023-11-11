@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,42 +37,42 @@
 
 param LAUNCH_ID: i16;
 
-const LAUNCH : color = @get_color(LAUNCH_ID);
-param COMP: color  = @get_color(2);
+// Colors
+const LAUNCH: color = @get_color(LAUNCH_ID);
 
-//---------------------------- FD code starts here
-
-param send: color = @get_color(3);
-
-param eastChannel: color = @get_color(4);
-param westChannel: color = @get_color(5);
+param eastChannel:  color = @get_color(4);
+param westChannel:  color = @get_color(5);
 param northChannel: color = @get_color(6);
 param southChannel: color = @get_color(7);
 
-param eastDataFin: color = @get_color(8);
-param westDataFin: color = @get_color(9);
-param northDataFin: color = @get_color(10);
-param southDataFin: color = @get_color(11);
+// Task IDs
+param send: local_task_id = @get_local_task_id(3);
+param COMP: local_task_id = @get_local_task_id(2);
 
-param eastCtrlFin: color = @get_color(12);
-param westCtrlFin: color = @get_color(13);
-param northCtrlFin: color = @get_color(14);
-param southCtrlFin: color = @get_color(15);
+param eastDataFin:  local_task_id = @get_local_task_id(8);
+param westDataFin:  local_task_id = @get_local_task_id(9);
+param northDataFin: local_task_id = @get_local_task_id(10);
+param southDataFin: local_task_id = @get_local_task_id(11);
+
+param eastCtrlFin:  local_task_id = @get_local_task_id(12);
+param westCtrlFin:  local_task_id = @get_local_task_id(13);
+param northCtrlFin: local_task_id = @get_local_task_id(14);
+param southCtrlFin: local_task_id = @get_local_task_id(15);
 
 // the following four are entrypoints (send control wavelets for switch)
 // we don't need to bind it to 0~23
-param eastCtrlFin2: color = @get_color(16);
-param westCtrlFin2: color = @get_color(17);
-param northCtrlFin2: color = @get_color(18);
-param southCtrlFin2: color = @get_color(19);
+param eastCtrlFin2:  local_task_id = @get_local_task_id(16);
+param westCtrlFin2:  local_task_id = @get_local_task_id(17);
+param northCtrlFin2: local_task_id = @get_local_task_id(18);
+param southCtrlFin2: local_task_id = @get_local_task_id(19);
 
-param eastFin: color = @get_color(20);
-// WARNING: color 21: reserved (memcpy)
-// WARNING: color 22: reserved (memcpy)
-//          color 23: reserved (memcpy)
-param westFin: color = @get_color(24);
-param northFin: color = @get_color(25);
-param southFin: color = @get_color(26);
+param eastFin:  local_task_id = @get_local_task_id(20);
+// WARNING: ID 21: reserved (memcpy)
+// WARNING: ID 22: reserved (memcpy)
+//          ID 23: reserved (memcpy)
+param westFin:  local_task_id = @get_local_task_id(24);
+param northFin: local_task_id = @get_local_task_id(25);
+param southFin: local_task_id = @get_local_task_id(26);
 
 
 param width: u16;
@@ -131,9 +131,10 @@ const invariants = .{
 
 const util = @import_module("util.csl");
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
-    .height = height
+    .height = height,
+    .LAUNCH=LAUNCH,
     });
 
 layout {
@@ -228,7 +229,6 @@ layout {
       // additional colors for memcpy
       const params_task = @concat_structs( .{
             .COMP = COMP,
-            .LAUNCH=LAUNCH,
             ._px=xId,
       }, params);
 

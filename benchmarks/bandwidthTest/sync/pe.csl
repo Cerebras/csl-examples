@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,10 @@ param c_recv_py: color;
 param c_send_py: color;
 param c_bcast: color;
 
-param STARTUP: color;
-param SYNC_Y: color;
-param SYNC_BCAST: color;
-param EXIT: color;
+param STARTUP: local_task_id;
+param SYNC_Y: local_task_id;
+param SYNC_BCAST: local_task_id;
+param EXIT: local_task_id;
 
 param first_px: bool;
 param last_px: bool;
@@ -174,10 +174,10 @@ comptime {
     @block(c_recv_py);
     @block(c_bcast);
 
-    @bind_task( f_startup, STARTUP);
-    @bind_task( f_sync_y, SYNC_Y);
-    @bind_task( f_sync_bcast, SYNC_BCAST);
-    @bind_task( f_exit, EXIT);
+    @bind_local_task( f_startup, STARTUP);
+    @bind_local_task( f_sync_y, SYNC_Y);
+    @bind_local_task( f_sync_bcast, SYNC_BCAST);
+    @bind_local_task( f_exit, EXIT);
 }
 
 

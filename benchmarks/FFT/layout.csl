@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,9 +23,10 @@ const HEIGHT: i16 = 1;
 const Nx = WIDTH;
 const Ny = HEIGHT;
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = WIDTH,
-    .height = HEIGHT
+    .height = HEIGHT,
+    .LAUNCH = LAUNCH
 });
 
 layout {
@@ -42,32 +43,30 @@ layout {
 
   if (WIDTH > 1) {
     // A row of PEs for 2D FFT
-    var idx :i16 = 0;
-    var idx0 :i16 = 0;
-    var idxW :i16 = 0;
+    var idx: i16 = 0;
+    var idx0: i16 = 0;
+    var idxW: i16 = 0;
     for (@zeros([WIDTH]u8)) |_, Px| {
-        const memcpyParams = memcpy.get_params(Px);
-        idx = Px;
-        idx0 = Px;
-        idxW = Px;
-        if (idx == 0) {
-          idx0 = 1;
-        }
-        if (idx == WIDTH-1) {
-          idxW = 1;
-        }
-        @set_tile_code(idx, 0, "ucode_2d.csl",.{.LAUNCH = LAUNCH, .Nz=Nz, .Nx=Nx, .Ny=Ny, .HEIGHT=HEIGHT, .WIDTH=WIDTH, .FP=FP, .tensor_type=tensor_type, .PE_X=idx, .PE_X0=idx0, .PE_XW=idxW, .memcpyParams = memcpyParams, });
+      const memcpyParams = memcpy.get_params(Px);
+      idx = Px;
+      idx0 = Px;
+      idxW = Px;
+      if (idx == 0) {
+        idx0 = 1;
       }
+      if (idx == WIDTH-1) {
+        idxW = 1;
+      }
+      @set_tile_code(idx, 0, "ucode_2d.csl",.{.Nz=Nz, .Nx=Nx, .Ny=Ny, .HEIGHT=HEIGHT, .WIDTH=WIDTH, .FP=FP, .tensor_type=tensor_type, .PE_X=idx, .PE_X0=idx0, .PE_XW=idxW, .memcpyParams = memcpyParams, });
+    }
   } else {
     const memcpyParams = memcpy.get_params(0);
     // Single Tile for 1D FFT
-    @set_tile_code(0, 0, "ucode_1d.csl",.{.LAUNCH=LAUNCH,.N=Nz, .FP=FP, .tensor_type=tensor_type, .memcpyParams = memcpyParams,});
+    @set_tile_code(0, 0, "ucode_1d.csl",.{.N=Nz, .FP=FP, .tensor_type=tensor_type, .memcpyParams = memcpyParams,});
   }
-
 
   @export_name("X", [*]tensor_type, true);
   @export_name("f", [*]tensor_type, true);
   @export_name("f_fft", fn()void);
   @export_name("f_ifft", fn()void);
-
 }

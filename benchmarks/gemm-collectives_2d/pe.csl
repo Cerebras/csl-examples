@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,19 @@
 // either the PE's home tile or the tile it received through broadcasts.
 
 param c2d_params: comptime_struct;
+param memcpy_params: comptime_struct;
+
+// Matrix size params
+param Mt: i16;
+param Kt: i16;
+param Nt: i16;
+
+// Task IDs
+param EXIT:            local_task_id; // entrypoint to leave RPC
+param compute_task_id: local_task_id;
+param x_task_id:       local_task_id;
+param y_task_id:       local_task_id;
+
 const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
@@ -39,25 +52,8 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 
-param memcpy_params: comptime_struct;
-
-// Task colors
-const compute_color = @get_color(12);
-const x_color = @get_color(14);
-const y_color = @get_color(15);
-
-// Matrix size params
-param Mt: i16;
-param Kt: i16;
-param Nt: i16;
-
-param LAUNCH : color;  // a routable color for RPC
-param EXIT: color;     // entrypoint to leave RPC
-
 // memcpy uses input/output queue 0
-const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-     .LAUNCH = LAUNCH
-    }));
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 const P = @get_rectangle().width;
 
@@ -80,11 +76,11 @@ var px: u16;
 var py: u16;
 
 task x_done() void {
-  @activate(compute_color);
+  @activate(compute_task_id);
 }
 
 task y_done() void {
-  @unblock(compute_color);
+  @unblock(compute_task_id);
 }
 
 var step: u16 = 0;
@@ -102,8 +98,8 @@ fn main() void {
   // Communicate along both rows and columns
   const Ap = if (px == step) &A_tile else &A_buffer;
   const Bp = if (py == step) &B_tile else &B_buffer;
-  mpi_x.broadcast(step, @ptrcast([*]u32, Ap), Mt * Kt, x_color);
-  mpi_y.broadcast(step, @ptrcast([*]u32, Bp), Kt * Nt, y_color);
+  mpi_x.broadcast(step, @ptrcast([*]u32, Ap), Mt * Kt, x_task_id);
+  mpi_y.broadcast(step, @ptrcast([*]u32, Bp), Kt * Nt, y_task_id);
 }
 
 task compute() void {
@@ -126,7 +122,7 @@ task compute() void {
   }
 
   step += 1;
-  @block(compute_color);
+  @block(compute_task_id);
 
   if (step != P) {
     main();
@@ -141,16 +137,15 @@ task f_exit() void {
 }
 
 comptime {
-  @bind_task(f_exit, EXIT);
-
-  @bind_task(compute, compute_color);
-  @bind_task(x_done, x_color);
-  @bind_task(y_done, y_color);
-  @block(compute_color);
+  @bind_local_task(f_exit, EXIT);
+  @bind_local_task(compute, compute_task_id);
+  @bind_local_task(x_done, x_task_id);
+  @bind_local_task(y_done, y_task_id);
+  @block(compute_task_id);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_B, "B");
   @export_symbol(ptr_C, "C");
   @export_symbol(main);
-  @rpc(LAUNCH);
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

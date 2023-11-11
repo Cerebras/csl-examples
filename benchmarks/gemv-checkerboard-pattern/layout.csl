@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The core kernel must start at P4.1 so the memcpy infrastructure has enough
-// resources to route the data between the host and the device.
+// color/ task ID map of histogram-torus + memcpy:
 //
-
-// color map of histogram-torus + memcpy:
-//
-// color  var     color  var      color  var              color  var
-//   0              9   LAUNCH     18                      27   reserved (memcpy)
-//   1   x_in      10   H2D_1      19                      28   reserved (memcpy)
-//   2             11   H2D_2      20                      29   reserved
-//   3   ax_out    12   D2H        21    reserved (memcpy) 30   reserved (memcpy)
-//   4   b_in      13              22    reserved (memcpy) 31   reserved
-//   5             14              23    reserved (memcpy) 32
-//   6             15              24    C_REDUCE          33
-//   7             16              25                      34
-//   8             17              26                      35
+//  ID var     ID var     ID var                ID var
+//   0          9 LAUNCH  18                    27 reserved (memcpy)
+//   1 x_in    10 H2D_1   19                    28 reserved (memcpy)
+//   2         11 H2D_2   20                    29 reserved
+//   3 ax_out  12 D2H     21 reserved (memcpy)  30 reserved (memcpy)
+//   4 b_in    13         22 reserved (memcpy)  31 reserved
+//   5         14         23 reserved (memcpy)  32
+//   6         15         24 REDUCE             33
+//   7         16         25                    34
+//   8         17         26                    35
 //
 
 // This does y = Ax + b where
@@ -38,16 +34,11 @@
 // The core rectangle is w-by-h where
 // w = kernel_cols and h = kernel_rows.
 
+// IDs for memcpy colors
 param MEMCPYH2D_DATA_1_ID: i16;
 param MEMCPYH2D_DATA_2_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
 param LAUNCH_ID: i16;
-
-param x_in : color;     // color for input X from NORTH to kernel
-
-// These colors are involved in the checkerboard pattern
-param b_in : color;     // color for input B from WEST to kernel
-param ax_out : color;   // alternate color for passing result towards EAST
 
 // Program uses 4x4 rectangle of PEs
 param kernel_rows : i16; // Height of kernel
@@ -57,12 +48,18 @@ param kernel_cols : i16; // Width of kernel
 param matrix_rows : i16; // Height of matrix
 param matrix_cols : i16; // Width of matrix
 
+// Colors
+const LAUNCH:           color = @get_color(LAUNCH_ID);
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-const LAUNCH: color = @get_color(LAUNCH_ID);
 
-const C_REDUCE: color = @get_color(24);
+param x_in:   color;   // color for input X from NORTH to kernel
+param b_in:   color;   // checkerboard pattern, color for input B from WEST to kernel
+param ax_out: color;   // checkerboard pattern, alternate color for passing result towards EAST
+
+// Task IDs
+const REDUCE: local_task_id = @get_local_task_id(24);
 
 const A_rows : i16 = matrix_rows;
 const A_cols : i16 = matrix_cols;
@@ -83,9 +80,13 @@ const X_local_dim_y : i16 = X_cols;
 const B_local_dim_x : i16 = B_rows / kernel_rows;
 const B_local_dim_y : i16 = B_cols;
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = kernel_cols,
-    .height = kernel_rows
+    .height = kernel_rows,
+    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+    .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+    .LAUNCH = LAUNCH
     });
 
 layout {
@@ -110,11 +111,7 @@ layout {
       const last_column: bool = (i == kernel_cols - 1);
       const dim_memcpy = @concat_structs( .{
         .memcpy_params = memcpy_params,
-        .LAUNCH = LAUNCH,
-        .MEMCPYH2D_DATA_1 = MEMCPYH2D_DATA_1,
-        .MEMCPYH2D_DATA_2 = MEMCPYH2D_DATA_2,
-        .MEMCPYD2H_DATA_1 = MEMCPYD2H_DATA_1,
-        .C_REDUCE = C_REDUCE,
+        .REDUCE = REDUCE,
         .last_column = last_column
       }, dimensions);
 

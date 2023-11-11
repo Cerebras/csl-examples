@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 
 param colors: [2]color;
-param entrypoints: [1]color;
+param entrypoints: [1]local_task_id;
 param width: i16 ;   // width of the core
 param height: i16 ;  // height of the core
 
@@ -27,7 +27,7 @@ const C1: color = colors[1];
 // LOCK performs the state transition
 // teardown handler activates LOCK
 // the operation blocks LOCK in the beginning and unblocks it when it finishes
-const C_LOCK: color = entrypoints[0];
+const C_LOCK: local_task_id = entrypoints[0];
 
 fn get_params(px:i16, py:i16) comptime_struct {
 

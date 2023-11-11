@@ -1,0 +1,61 @@
+// Copyright 2023 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// One streaming D2H:
+// 1st D2H: UT 5 and UT 6
+
+param MEMCPYD2H_1: color = @get_color(32);
+
+// Color along which we expect a wavelet
+param USER_OUT_1: color = @get_color(32);
+
+param rxdir: direction;
+
+const max_fifo_len = 256*40; // maximum length of the fifo
+
+var fifo1_buffer = @zeros([max_fifo_len]u32);
+const fifo1 = @allocate_fifo(fifo1_buffer);
+
+// length=inf
+var fab_recv_wdsd = @get_dsd(fabin_dsd, .{
+   .extent = 0x7fff,
+   .fabric_color = USER_OUT_1,
+   .input_queue = @get_input_queue(6)
+});
+
+// length=inf
+var fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 0x7fff,
+    .fabric_color = MEMCPYD2H_1,
+    .output_queue = @get_output_queue(5)
+});
+
+// if USER_OUT_1 is not valid, f_startup() is empty
+fn f_startup() void {
+    if ( (@get_int(MEMCPYD2H_1) < 24) and (@get_int(USER_OUT_1) < 24) ){
+        // receive data from USER_OUT_1
+        @mov32(fifo1, fab_recv_wdsd, .{.async=true} );
+
+        // forward data to MEMCPYD2H_1
+        @mov32(fab_trans_wdsd, fifo1, .{.async=true} );
+    }
+}
+
+comptime {
+    if (@get_int(USER_OUT_1) < 24){
+        const d2h_route = .{ .rx = .{ rxdir }, .tx = .{ RAMP } };
+        @set_local_color_config(USER_OUT_1, .{ .routes = d2h_route });
+    }
+}

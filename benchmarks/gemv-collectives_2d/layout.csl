@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,19 @@
 // limitations under the License.
 
 // This does y = Ax + b on a kernel_cols x kernel_rows rectangle of PEs.
+
+// color/ task ID map
+//
+//  ID var             ID var              ID var               ID var
+//   0 c2d_x_color_0    9 EXIT             18                   27 reserved (memcpy)
+//   1 c2d_x_color_1   10 scatter_x        19                   28 reserved (memcpy)
+//   2                 11 broadcast_x_down 20                   29 reserved
+//   3                 12 compute          21 reserved (memcpy) 30 reserved (memcpy)
+//   4 c2d_y_color_0   13 gather_result    22 reserved (memcpy) 31 reserved
+//   5 c2d_y_color_1   14 c2d_x_entrypt_0  23 reserved (memcpy) 32
+//   6                 15 c2d_x_entrypt_1  24                   33
+//   7                 16 c2d_y_entrypt_0  25                   34
+//   8 LAUNCH          17 c2d_y_entrypt_1  26                   35
 
 // Kernel rectangle of PEs
 param kernel_rows : u16; // Height of kernel
@@ -31,15 +44,23 @@ comptime {
 }
 
 // Local matrix dimensions
-const Mt : u16 = matrix_rows / kernel_rows; // Number of rows per PE
-const Nt : u16 = matrix_cols / kernel_cols; // Number of columns per PE
+const Mt: u16 = matrix_rows / kernel_rows; // Number of rows per PE
+const Nt: u16 = matrix_cols / kernel_cols; // Number of columns per PE
 
-const LAUNCH : color = @get_color(8);
-const EXIT : color   = @get_color(9);
+// Colors
+const LAUNCH: color = @get_color(8);
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+// Task IDs
+const EXIT:                     local_task_id = @get_local_task_id(9);
+const scatter_x_task_id:        local_task_id = @get_local_task_id(10);
+const broadcast_x_down_task_id: local_task_id = @get_local_task_id(11);
+const compute_task_id:          local_task_id = @get_local_task_id(12);
+const gather_result_task_id:    local_task_id = @get_local_task_id(13);
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = kernel_cols,
-    .height = kernel_rows
+    .height = kernel_rows,
+    .LAUNCH = LAUNCH
 });
 
 const c2d = @import_module("<collectives_2d/params>");
@@ -53,11 +74,21 @@ layout {
     const memcpy_params = memcpy.get_params(Px);
     while (Py < kernel_rows) : (Py += 1) {
       const c2d_params = c2d.get_params(Px, Py, .{
-        .x_colors = .{ @get_color(0), @get_color(1), @get_color(2), @get_color(3) },
-        .y_colors = .{ @get_color(4), @get_color(5), @get_color(6), @get_color(7) },
+        .x_colors      = .{ @get_color(0),         @get_color(1) },
+        .x_entrypoints = .{ @get_local_task_id(14), @get_local_task_id(15) },
+        .y_colors      = .{ @get_color(4),         @get_color(5) },
+        .y_entrypoints = .{ @get_local_task_id(16), @get_local_task_id(17) },
       });
-      @set_tile_code(Px, Py, "pe.csl", .{ .c2d_params = c2d_params, .memcpy_params = memcpy_params,
-        .Mt = Mt, .Nt = Nt, .LAUNCH = LAUNCH, .EXIT = EXIT });
+      @set_tile_code(Px, Py, "pe.csl", .{
+        .memcpy_params = memcpy_params,
+        .c2d_params = c2d_params,
+        .Mt = Mt,
+        .Nt = Nt,
+        .EXIT = EXIT,
+        .scatter_x_task_id = scatter_x_task_id,
+        .broadcast_x_down_task_id = broadcast_x_down_task_id,
+        .compute_task_id = compute_task_id,
+        .gather_result_task_id = gather_result_task_id });
     }
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,20 +36,21 @@ const C4 : color = @get_color(C4_ID);
 const LAUNCH : color = @get_color(LAUNCH_ID);
 
 // entrypoints of sync module
-const STARTUP: color = @get_color(15);
-const SYNC_Y: color = @get_color(16);
-const SYNC_BCAST: color = @get_color(17);
-const EXIT: color = @get_color(18);
+const STARTUP: local_task_id = @get_local_task_id(15);
+const SYNC_Y: local_task_id = @get_local_task_id(16);
+const SYNC_BCAST: local_task_id = @get_local_task_id(17);
+const EXIT: local_task_id = @get_local_task_id(18);
 
 
-const memcpy = @import_module( "<memcpy_multi/get_params>", .{
+const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
-    .height = height
+    .height = height,
+    .LAUNCH = LAUNCH
     });
 
 const sync = @import_module( "sync/layout.csl", .{
     .colors = [5]color{C0, C1, C2, C3, C4},
-    .entrypoints = [4]color{STARTUP, SYNC_Y, SYNC_BCAST, EXIT},
+    .entrypoints = [4]local_task_id{STARTUP, SYNC_Y, SYNC_BCAST, EXIT},
     .width = width,
     .height = height
     });
@@ -81,7 +82,6 @@ layout{
 
             var params: comptime_struct = .{
                 .memcpyParams = memcpyParams,
-                .LAUNCH = LAUNCH,
                 .pe_length = pe_length,
 
                 .syncParams = syncParams,

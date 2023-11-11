@@ -1,4 +1,4 @@
-// Copyright 2022 Cerebras Systems.
+// Copyright 2023 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+// Color used by memcpy for RPC mechanism
+const LAUNCH: color = @get_color(8);
+
 // Import memcpy layout module for 1 x 1 grid of PEs
 // This module defines parameters passed to program on the single PE
-const memcpy = @import_module("<memcpy_multi/get_params>", .{
+const memcpy = @import_module("<memcpy/get_params>", .{
   .width = 1,
-  .height = 1
+  .height = 1,
+  .LAUNCH = LAUNCH
 });
 
 layout {

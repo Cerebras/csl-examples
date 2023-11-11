@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2022 Cerebras Systems.
+# Copyright 2023 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,9 +19,8 @@ import argparse
 import json
 import numpy as np
 
-from cerebras.sdk.sdk_utils import memcpy_view
+from cerebras.sdk.sdk_utils import memcpy_view, input_array_to_u32
 from cerebras.sdk.debug.debug_util import debug_util
-from cerebras.sdk.runtime import runtime_utils # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder # pylint: disable=no-name-in-module
 
@@ -123,7 +122,7 @@ A1 = A.reshape(kernel_rows, per_pe_rows,
 A2 = A1.transpose(0, 2, 1, 3)
 A3 = A2.reshape(kernel_rows, kernel_cols, per_pe_rows*per_pe_cols)
 print("step 1: copy mode H2D A")
-A_1d_u32 = runtime_utils.input_array_to_u32(np_arr=A3.ravel(), sentinel=0, \
+A_1d_u32 = input_array_to_u32(np_arr=A3.ravel(), sentinel=0, \
     fast_dim_sz=per_pe_rows*per_pe_cols)
 runner.memcpy_h2d(sym_A, A_1d_u32, 0, 0, kernel_cols, kernel_rows, per_pe_rows*per_pe_cols, \
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=True)
@@ -131,14 +130,14 @@ runner.memcpy_h2d(sym_A, A_1d_u32, 0, 0, kernel_cols, kernel_rows, per_pe_rows*p
 print("step 2: streaming mode H2D X at 1st row via color MEMCPYH2D_DATA_1")
 print("    each PE receives x, performs local A*x and triggers chain reduction")
 # extend x with index in the upper 16-bit
-x_1d_u32 = runtime_utils.input_array_to_u32(np_arr=X.ravel(), sentinel=1, fast_dim_sz=per_pe_cols)
+x_1d_u32 = input_array_to_u32(np_arr=X.ravel(), sentinel=1, fast_dim_sz=per_pe_cols)
 runner.memcpy_h2d(MEMCPYH2D_DATA_1, x_1d_u32, 0, 0, kernel_cols, 1, per_pe_cols,\
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=True)
 
 print("step 3: streaming mode H2D B at 1st column via color MEMCPYH2D_DATA_2")
 print("   1st column receives B to start the chain reduction, others wait for data from the west")
 # extend x with zero in the upper 16-bit
-b_1d_u32 = runtime_utils.input_array_to_u32(np_arr=B.ravel(), sentinel=0, fast_dim_sz=per_pe_rows)
+b_1d_u32 = input_array_to_u32(np_arr=B.ravel(), sentinel=0, fast_dim_sz=per_pe_rows)
 runner.memcpy_h2d(MEMCPYH2D_DATA_2, b_1d_u32, 0, 0, 1, kernel_rows, per_pe_rows,\
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=True)
 
