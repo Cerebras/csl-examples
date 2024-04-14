@@ -7,6 +7,6 @@ cslc ./code.csl \
 --colors=OUT_COLOR:8 \
 --fabric-dims=15,10 --fabric-offsets=4,1 -o out \
 --params=MEMCPYH2D_DATA_1_ID:10 \
---params=MEMCPYD2H_DATA_1_ID:11 --params=LAUNCH_ID:9 \
+--params=MEMCPYD2H_DATA_1_ID:11 \
 --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0
 cs_python run.py --name out

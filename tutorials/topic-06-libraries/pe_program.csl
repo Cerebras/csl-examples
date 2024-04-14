@@ -121,5 +121,4 @@ fn f_send_timestamps() void {
 comptime{
   @export_symbol(f_run);
   @export_symbol(f_send_timestamps);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

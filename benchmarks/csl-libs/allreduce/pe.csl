@@ -847,12 +847,10 @@ fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
 
 
 comptime {
-    // last PE uses a microthread to receive data
-    @block(C_ROUTE);
-    @bind_local_task( f_send_ctrl, C_SEND_CTRL);
-    @bind_local_task( f_send_data, C_SEND_DATA);
-    @bind_local_task( f_state_entry, C_STATE_ENTRY);
-    @bind_local_task( f_lock, C_LOCK);
+    @bind_local_task(f_send_ctrl, C_SEND_CTRL);
+    @bind_local_task(f_send_data, C_SEND_DATA);
+    @bind_local_task(f_state_entry, C_STATE_ENTRY);
+    @bind_local_task(f_lock, C_LOCK);
 }
 
 

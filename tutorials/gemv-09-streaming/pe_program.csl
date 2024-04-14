@@ -143,5 +143,4 @@ comptime {
   @bind_local_task(reduce, reduce_task_id);
 
   @export_symbol(A_ptr, "A");
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

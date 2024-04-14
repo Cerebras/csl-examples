@@ -15,13 +15,7 @@
 param M: i16;
 param N: i16;
 
-const LAUNCH: color = @get_color(8);
-
-const memcpy = @import_module("<memcpy/get_params>", .{
-  .width = 1,
-  .height = 1,
-  .LAUNCH = LAUNCH
-});
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 1, .height = 1 });
 
 layout {
   @set_rectangle(1, 1);

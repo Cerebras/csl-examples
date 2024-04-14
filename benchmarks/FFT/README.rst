@@ -10,8 +10,8 @@ The 1D and 2D FFT CSL implementations share the following characteristics:
 
 #. An input tensor of random real values, denoted by ``X`` in the code, is
    generated on the host (``run.py`` script) and is preloaded into the PEs.
-#. The twiddle factors (tensor of complex values), denoted ``f`` in the code,
-   are also computed on the host and preloaded into the PEs.
+#. The twiddle factors (tensor of complex values), denoted ``f_twiddle`` in
+   the code, are also computed on the host and preloaded into the PEs.
 #. The host reads the FFT result (tensor of complex values) from PE memories,
    also stored in ``X``.
 #. The above means that there is no data streaming and therefore no halo is

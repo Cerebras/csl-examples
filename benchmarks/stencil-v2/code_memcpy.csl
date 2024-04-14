@@ -24,7 +24,7 @@
 // color map of FD + memcpy:
 //
 // color  var             color  var          color  var              color  var
-//   0   LAUNCH             9    westDataFin   18    northCtrlFin2     27   reserved (memcpy)
+//   0                      9    westDataFin   18    northCtrlFin2     27   reserved (memcpy)
 //   1                     10    northDataFin  19    southCtrlFin2     28   reserved (memcpy)
 //   2   f_comp            11    southDataFin  20    eastFin           29   reserved (memcpy)
 //   3   send              12    eastCtrlFin   21    reserved (memcpy) 30   reserved (memcpy)
@@ -35,11 +35,7 @@
 //   8   eastDataFin       17    westCtrlFin2  26    southFin          35
 //
 
-param LAUNCH_ID: i16;
-
 // Colors
-const LAUNCH: color = @get_color(LAUNCH_ID);
-
 param eastChannel:  color = @get_color(4);
 param westChannel:  color = @get_color(5);
 param northChannel: color = @get_color(6);
@@ -134,15 +130,12 @@ const util = @import_module("util.csl");
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
     .height = height,
-    .LAUNCH=LAUNCH,
     });
 
 layout {
   @comptime_assert(pattern <= width);
   @comptime_assert(pattern <= height);
   @comptime_assert(pattern > 1 and pattern < 8);
-
-  @comptime_assert(0 == LAUNCH_ID);
 
   // step 1: configure the rectangle which does not include halo
   @set_rectangle(width, height);

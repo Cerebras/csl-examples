@@ -59,5 +59,4 @@ comptime {
   @bind_local_task(mainTask, main_task_id);
 
   @export_symbol(f_run);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

@@ -34,8 +34,8 @@ const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 const sync_mod = @import_module( "sync/pe.csl", @concat_structs(syncParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
-     .input_queues=[3]u16{1, 2, 3},
-     .output_queues=[3]u16{1, 2, 3},
+     .input_queues=[3]u16{2, 3, 4},
+     .output_queues=[3]u16{2, 3, 4},
      }));
 
 
@@ -139,5 +139,4 @@ comptime{
     @export_symbol(f_memcpy_timestamps);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
-    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

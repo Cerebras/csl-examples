@@ -14,7 +14,7 @@
 
 
 // color var           color  var           color  var                color  var
-//   0  LAUNCH         10  init             20   tx_east              30 reserved (memcpy)
+//   0                 10  init             20   tx_east              30 reserved (memcpy)
 //   1  c0             11  compute_north    21   reserved (memcpy)    31 reserved
 //   2  c1             12  compute_south    22   reserved (memcpy)    32
 //   3  c2             13  tx_north         23   reserved (memcpy)    33 reserved (memcpy)
@@ -24,9 +24,6 @@
 //   7  allreduce_c0   17  rx_east          27   reserved (memcpy)    37 reserved (memcpy)
 //   8  allreduce_c1   18  rx_west          28   reserved (memcpy)
 //   9  allreduce_EN1  19  tx_west          29   reserved (memcpy)
-
-// LAUNCH must be a routable color 0~23
-param LAUNCH_ID: i16;
 
 // routable colors for spmv
 param c0 = @get_color(1);
@@ -58,8 +55,6 @@ param EN12: local_task_id = @get_local_task_id(24);
 param EN13: local_task_id = @get_local_task_id(25);
 param EN14: local_task_id = @get_local_task_id(26);
 
-
-const LAUNCH : color = @get_color(LAUNCH_ID);
 
 // parameters of spmv layout
 //          pcols
@@ -98,14 +93,11 @@ const reduce = @import_module( "allreduce2R1E/layout.csl", .{
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = pcols,
     .height = prows,
-    .LAUNCH = LAUNCH
     });
 
 layout {
     // NOTE: This scheme assumes prows >= 4
     @comptime_assert(prows >= 4);
-
-    @comptime_assert(0 == LAUNCH_ID);
 
     //         --> px = pcol_id
     //          pcols

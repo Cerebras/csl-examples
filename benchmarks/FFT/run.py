@@ -60,7 +60,6 @@ with open(f"{args.name}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
 compile_colors = compile_data["colors"]
 compile_params = compile_data["params"]
-LAUNCH = int(compile_colors["LAUNCH"])
 
 DIM = int(compile_params["DIM"])
 Nz = int(compile_params["Nz"])
@@ -99,14 +98,14 @@ GLOBAL_TENSOR_LEN = GLOBAL_TENSOR_ELEM * ELEM_SIZE
 
 CHECK_RES = not args.no_check_outcome
 
-f_container = np.zeros(Nz, dtype=np.uint32)
-f = sdk_utils.memcpy_view(f_container, precision_type)
+f_twiddle_container = np.zeros(Nz, dtype=np.uint32)
+f_twiddle = sdk_utils.memcpy_view(f_twiddle_container, precision_type)
 
 exponent = np.pi * np.arange(Nh) / Nh
 fI = np.sin(exponent).astype(precision_type)
 fR = np.cos(exponent).astype(precision_type)
-f[0::2] = fR
-f[1::2] = fI
+f_twiddle[0::2] = fR
+f_twiddle[1::2] = fI
 
 # Set the seed so that CI results are deterministic
 np.random.seed(seed=7)
@@ -133,7 +132,7 @@ for y in range(Ny):
 
 print(f"X.shape: {X.shape}, X.dtype = {X.dtype}")
 print(f"X = {X}")
-print(f"f = {f}")
+print(f"f_twiddle = {f_twiddle}")
 
 #########################################
 dirname = f"{args.name}"
@@ -146,15 +145,15 @@ runner.load()
 runner.run()
 
 symbol_X = runner.get_id("X")
-symbol_f = runner.get_id("f")
+symbol_f_twiddle = runner.get_id("f_twiddle")
 
 runner.memcpy_h2d(symbol_X, X_container.ravel(), 0, 0, width, height, LOCAL_TENSOR_LEN,
                   streaming=False, data_type=memcpy_dtype,
                   order=memcpy_order, nonblock=False)
 
 # Write 'f' to every PE.
-f_fill = np.full((height, width, Nz), f_container, dtype=np.uint32)
-runner.memcpy_h2d(symbol_f, f_fill.ravel(), 0, 0, width, height, Nz,
+f_twiddle_fill = np.full((height, width, Nz), f_twiddle_container, dtype=np.uint32)
+runner.memcpy_h2d(symbol_f_twiddle, f_twiddle_fill.ravel(), 0, 0, width, height, Nz,
                   streaming=False, data_type=memcpy_dtype,
                   order=memcpy_order, nonblock=False)
 

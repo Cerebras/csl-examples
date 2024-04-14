@@ -95,7 +95,6 @@ def csl_compile(
     fabric_width: int,
     fabric_height: int,
     name: str,
-    c_launch: int,
     n_channels: int,
     width_west_buf: int,
     width_east_buf: int
@@ -114,7 +113,6 @@ def csl_compile(
   args.append(f"--params=srcX:{srcX},srcY:{srcY},srcZ:{srcZ}")
   args.append("--verbose")
   args.append(f"-o={name}_code")
-  args.append(f"--params=LAUNCH_ID:{c_launch}")
   if arch is not None:
     args.append(f"--arch={arch}")
   args.append("--memcpy")
@@ -201,10 +199,6 @@ def main():
   print(f"srcY (y-coordinate of the source) = height/2 - 5 = {srcY}")
   print(f"srcZ (z-coordinate of the source) = zdim/2 - 5   = {srcZ}")
 
-  c_launch = 0
-
-  print(f"c_launch = {c_launch}")
-
   if not args.skip_compile:
     print("Cleaned up existing elf files before compilation")
     elf_paths = glob(f"{name}_code_*.elf")
@@ -219,7 +213,6 @@ def main():
         cslc, arch_default, width, height, core_fabric_offset_x, core_fabric_offset_y,
         zDim, sourceLength, dx, srcX, srcY, srcZ,
         fabric_width, fabric_height, name,
-        c_launch,
         n_channels,
         width_west_buf,
         width_east_buf)

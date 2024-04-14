@@ -418,7 +418,6 @@ def csl_compile_core(
     core_fabric_offset_y : int,
     use_precompile: bool,
     arch : Optional[str],
-    LAUNCH:int,
     ncols: int,
     nrows: int,
     np_cols: int,
@@ -441,7 +440,6 @@ def csl_compile_core(
         args.append(file_config) # options
         args.append(f"--fabric-dims={fabric_width},{fabric_height}") # options
         args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}") # options
-        args.append(f"--params=LAUNCH_ID:{LAUNCH}") # options
         args.append(f"--params=ncols:{ncols}") # options
         args.append(f"--params=nrows:{nrows}") # options
         args.append(f"--params=pcols:{np_cols}") # options
@@ -625,7 +623,6 @@ def main():
     out_vec_len_per_pe_row = math.ceil(nrows / np_rows)
     out_pad_start_idx = out_vec_len_per_pe_row
 
-    LAUNCH = 0
     start = time.time()
     csl_compile_core(
         cslc,
@@ -637,7 +634,6 @@ def main():
         core_fabric_offset_y,
         args.run_only,
         args.arch,
-        LAUNCH,
         ncols, # m, number of rows of the matrix
         nrows, # n, number of columns of the matrix
         np_cols, # width

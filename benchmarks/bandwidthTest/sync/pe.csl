@@ -32,10 +32,19 @@ param last_py: bool;
 // f_callback = sys_mod.unblock_cmd_stream, to continue next command
 param f_callback : fn ()void;
 
-// input_queues={1,2,3}
-// output_queues={1,2,3}
+// input_queues={2,3,4}
+// output_queues={2,3,4}
 param input_queues:[3]u16;
 param output_queues:[3]u16;
+
+const c_recv_px_iq = @get_input_queue(input_queues[0]);
+const c_send_px_oq = @get_output_queue(output_queues[0]);
+
+const c_recv_py_iq = @get_input_queue(input_queues[1]);
+const c_send_py_oq = @get_output_queue(output_queues[1]);
+
+const c_bcast_iq = @get_input_queue(input_queues[2]);
+const c_bcast_oq = @get_output_queue(input_queues[2]);
 
 const timestamp = @import_module("<time>");
 
@@ -59,37 +68,37 @@ const mem_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> buf[i] });
 var fab_recv_data_px_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = 1,
    .fabric_color = c_recv_px,
-   .input_queue = @get_input_queue(input_queues[0])
+   .input_queue = c_recv_px_iq
 });
 
 var fab_trans_data_px_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_send_px,
-    .output_queue = @get_output_queue(output_queues[0])
+    .output_queue = c_send_px_oq
 });
 
 var fab_recv_data_py_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = 1,
    .fabric_color = c_recv_py,
-   .input_queue = @get_input_queue(input_queues[1])
+   .input_queue = c_recv_py_iq
 });
 
 var fab_trans_data_py_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_send_py,
-    .output_queue = @get_output_queue(output_queues[1])
+    .output_queue = c_send_py_oq
 });
 
 var fab_recv_data_bcast_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = 1,
    .fabric_color = c_bcast,
-   .input_queue = @get_input_queue(input_queues[2])
+   .input_queue = c_bcast_iq
 });
 
 var fab_trans_data_bcast_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = c_bcast,
-    .output_queue = @get_output_queue(output_queues[2])
+    .output_queue = c_bcast_oq
 });
 
 
@@ -166,18 +175,24 @@ task f_startup() void {
 }
 
 comptime {
-
     @activate(STARTUP);
 
-    // use microthreads to receive the data
-    @block(c_recv_px);
-    @block(c_recv_py);
-    @block(c_bcast);
+    @bind_local_task(f_startup, STARTUP);
+    @bind_local_task(f_sync_y, SYNC_Y);
+    @bind_local_task(f_sync_bcast, SYNC_BCAST);
+    @bind_local_task(f_exit, EXIT);
 
-    @bind_local_task( f_startup, STARTUP);
-    @bind_local_task( f_sync_y, SYNC_Y);
-    @bind_local_task( f_sync_bcast, SYNC_BCAST);
-    @bind_local_task( f_exit, EXIT);
+    // On WSE-3, we must explicitly initialize input and output queues
+    if (@is_arch("wse3")) {
+        @initialize_queue(c_recv_px_iq, .{ .color = c_recv_px });
+        @initialize_queue(c_send_px_oq, .{ .color = c_send_px });
+
+        @initialize_queue(c_recv_py_iq, .{ .color = c_recv_py });
+        @initialize_queue(c_send_py_oq, .{ .color = c_send_py });
+
+        @initialize_queue(c_bcast_iq, .{ .color = c_bcast });
+        @initialize_queue(c_bcast_oq, .{ .color = c_bcast });
+    }
 }
 
 

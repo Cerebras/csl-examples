@@ -16,8 +16,6 @@ param DIM: i16;  // FFT dimension: 1 == 1D, 2 == 2D
 param Nz: i16;   // Input vector size
 param FP: i16;   // Precision: 1 == float16, 2 == float32
 
-param LAUNCH: color;
-
 const WIDTH: i16 = if (DIM == 1) 1 else Nz;
 const HEIGHT: i16 = 1;
 const Nx = WIDTH;
@@ -25,8 +23,7 @@ const Ny = HEIGHT;
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = WIDTH,
-    .height = HEIGHT,
-    .LAUNCH = LAUNCH
+    .height = HEIGHT
 });
 
 layout {
@@ -66,7 +63,7 @@ layout {
   }
 
   @export_name("X", [*]tensor_type, true);
-  @export_name("f", [*]tensor_type, true);
+  @export_name("f_twiddle", [*]tensor_type, true);
   @export_name("f_fft", fn()void);
   @export_name("f_ifft", fn()void);
 }

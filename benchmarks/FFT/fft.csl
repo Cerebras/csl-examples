@@ -34,7 +34,7 @@ const Xaux_stride2_dsd   = @set_dsd_stride(Xaux_dsd, 2);
 const X_odd_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> X[i+N_signed] });
 const X_even_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> X[i] });
 
-fn fft(f: *[N]tensor_type) void {
+fn fft(f_twiddle: *[N]tensor_type) void {
   var subproblems = N;
   while (subproblems > 1) {
 
@@ -65,8 +65,8 @@ fn fft(f: *[N]tensor_type) void {
 
       var c1a:tensor_type = @as(tensor_type, 0.0);
       var c1b:tensor_type = @as(tensor_type, 0.0);
-      c1a = (f.*)[offset];
-      c1b = (f.*)[offset+1];
+      c1a = (f_twiddle.*)[offset];
+      c1b = (f_twiddle.*)[offset+1];
 
       if (FP==1){
         /// Twiddling Factors application to the ODD part of the array (second half)
@@ -125,9 +125,9 @@ fn fft(f: *[N]tensor_type) void {
   } // end while subproblems
 }
 
-fn ifft(f: *[N]tensor_type) void {
+fn ifft(f_twiddle: *[N]tensor_type) void {
   //apply @fnegh|s to the complex part of the twiddle factors to get their complex conjugate
-  var fDSD = @set_dsd_length(@increment_dsd_offset(@set_dsd_base_addr(Xaux_dsd, f), 1, tensor_type), N);
+  var fDSD = @set_dsd_length(@increment_dsd_offset(@set_dsd_base_addr(Xaux_dsd, f_twiddle), 1, tensor_type), N);
   fDSD = @set_dsd_stride(fDSD, 2);
   if (FP==1){
     @fnegh(fDSD, fDSD);
@@ -136,7 +136,7 @@ fn ifft(f: *[N]tensor_type) void {
   }
 
   //call fft
-  fft(f);
+  fft(f_twiddle);
 
   //scale by 1/N
   var resultDSD = @set_dsd_base_addr(@set_dsd_length(Xaux_dsd, 2*N), X);

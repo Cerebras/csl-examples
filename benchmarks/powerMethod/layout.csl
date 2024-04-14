@@ -17,7 +17,7 @@
 //
 // color  var   color  var        color  var              color  var
 //   0   C0       9                18    EN_REDUCE_2       27   reserved (memcpy)
-//   1   C1      10  LAUNCH        19    EN_REDUCE_3       28   reserved (memcpy)
+//   1   C1      10                19    EN_REDUCE_3       28   reserved (memcpy)
 //   2   C2      11                20    EN_REDUCE_4       29   reserved (memcpy)
 //   3   C3      12                21    reserved (memcpy) 30   reserved (memcpy)
 //   4   C4      13                22    reserved (memcpy) 31   reserved
@@ -26,8 +26,6 @@
 //   7   C7      16  EN_STENCIL_3  25                      34
 //   8   C8      17  EN_REDUCE_1   26                      35
 //
-
-param LAUNCH_ID: i16;
 
 // c0,c1,c2,c3,c4,c5,c6,c7 are internal colors of 7-point stencil
 param C0_ID: i16;
@@ -46,8 +44,6 @@ param width: i16 ; // width of the core
 param height: i16 ; // height of the core
 
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
-
-const LAUNCH: color = @get_color(LAUNCH_ID);
 
 const C0: color = @get_color(C0_ID);
 const C1: color = @get_color(C1_ID);
@@ -87,7 +83,6 @@ const reduce = @import_module( "../csl-libs/allreduce/layout.csl", .{
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
     .height = height,
-    .LAUNCH = LAUNCH
     });
 
 layout{
@@ -100,9 +95,6 @@ layout{
     @comptime_assert(C5_ID < C6_ID);
     @comptime_assert(C6_ID < C7_ID);
     @comptime_assert(C7_ID < C8_ID);
-    @comptime_assert(C8_ID < LAUNCH_ID);
-
-    @comptime_assert(LAUNCH_ID < 14);
 
     // step 1: configure the rectangle which does not include halo
     @set_rectangle( width, height );

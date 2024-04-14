@@ -153,7 +153,6 @@ def csl_compile_core(
     core_fabric_offset_y: int,
     use_precompile: bool,
     arch: Optional[str],
-    LAUNCH: int,
     C0: int,
     C1: int,
     C2: int,
@@ -175,7 +174,6 @@ def csl_compile_core(
     args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
     args.append(f"--params=width:{width},height:{height},MAX_ZDIM:{pe_length}")
     args.append(f"--params=BLOCK_SIZE:{blockSize}")
-    args.append(f"--params=LAUNCH_ID:{LAUNCH}")
     args.append(f"--params=C0_ID:{C0}")
     args.append(f"--params=C1_ID:{C1}")
     args.append(f"--params=C2_ID:{C2}")
@@ -358,7 +356,6 @@ def main():
   C6 = 6
   C7 = 7
   C8 = 8
-  LAUNCH = 10
 
   csl_compile_core(
       cslc,
@@ -374,7 +371,6 @@ def main():
       core_fabric_offset_y,
       args.run_only,
       args.arch,
-      LAUNCH,
       C0,
       C1,
       C2,

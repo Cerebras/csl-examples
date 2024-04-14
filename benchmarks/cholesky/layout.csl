@@ -20,7 +20,7 @@
 //  ID var        ID var           ID var                ID var
 //   0 row_color   9               18 cont_task_id       27 reserved (memcpy)
 //   1 col_color  10               19                    28 reserved (memcpy)
-//   2 LAUNCH     11               20                    29 reserved
+//   2            11               20                    29 reserved
 //   3            12               21 reserved (memcpy)  30 reserved (memcpy)
 //   4            13               22 reserved (memcpy)  31 reserved
 //   5            14               23 reserved (memcpy)  32
@@ -34,7 +34,6 @@ param Nt: i16;
 // Colors
 const row_color: color = @get_color(0);
 const col_color: color = @get_color(1);
-const LAUNCH:    color = @get_color(2);
 
 // Task IDs
 const main_task_id: local_task_id = @get_local_task_id(17);
@@ -42,8 +41,7 @@ const cont_task_id: local_task_id = @get_local_task_id(18);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = P,
-    .height = P,
-    .LAUNCH = LAUNCH
+    .height = P
     });
 
 
@@ -93,11 +91,11 @@ layout {
       const routes = .{
         .rx = .{ WEST },
         .tx = .{ RAMP, EAST },
-        .pop_mode = .{ .pop_on_advance = true }
       };
       const switches = .{
         .pos1 = .{ .tx = EAST },
-        .pos2 = .{ .rx = RAMP }
+        .pos2 = .{ .rx = RAMP },
+        .pop_mode = .{ .pop_on_advance = true }
       };
       @set_color_config(x, y, row_color, .{ .routes = routes, .switches = switches });
     }

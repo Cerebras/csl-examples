@@ -30,5 +30,4 @@ comptime{
   @export_symbol(ptr_tile, "tile");
 
   @export_symbol(f_chol);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

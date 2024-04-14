@@ -15,7 +15,7 @@
 // color/ task ID map of histogram-torus + memcpy:
 //
 // ID var                ID var                  ID var                ID var
-//   0 ns_routes.c0       9 LAUNCH               18                    27 reserved (memcpy)
+//   0 ns_routes.c0       9                      18                    27 reserved (memcpy)
 //   1 ns_routes.c1      10 H2D                  19                    28 reserved (memcpy)
 //   2 ns_routes.c2      11 D2H                  20                    29 reserved
 //   3 ns_routes.c3      12 tally.c0             21 reserved (memcpy)  30 reserved (memcpy)
@@ -28,7 +28,6 @@
 
 param MEMCPYH2D_DATA_1_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
-param LAUNCH_ID: i16;
 
 param INPUT_SIZE: u32;
 param NUM_BUCKETS: u32;
@@ -40,7 +39,6 @@ param HIST_HEIGHT: i16;
 param OUT_COLOR: color;
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-const LAUNCH: color = @get_color(LAUNCH_ID);
 
 const tally = @import_module("<kernels/tally/layout>", .{
   .kernel_height=HIST_HEIGHT,
@@ -65,7 +63,6 @@ const we_routes = @import_module("routes.csl", .{
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = HIST_WIDTH,
     .height = HIST_HEIGHT,
-    .LAUNCH = LAUNCH,
     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
     });

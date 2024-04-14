@@ -24,9 +24,6 @@
 // internal color PSUM is used in row reduction
 // internal color NRM is used in column reduction
 
-// global routing colors
-param LAUNCH_ID: i16;
-
 // (LOCAL_OUT_SZ, LOCAL_IN_SZ) is the dimension of local tensor
 //    A is LOCAL_OUT_SZ-by-LOCAL_IN_SZ
 //    x is LOCAL_IN_SZ-by-1
@@ -46,8 +43,6 @@ param width: i16;
 param height: i16;
 
 // Colors
-const LAUNCH:  color = @get_color(LAUNCH_ID);
-
 const RXACT_X: color = @get_color(8);  // receive x
 const PSUM:    color = @get_color(9);  // row reduction
 const NRM:     color = @get_color(10); // column reduction
@@ -63,8 +58,7 @@ const EXIT:   local_task_id = @get_local_task_id(17);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
-    .height = height,
-    .LAUNCH = LAUNCH
+    .height = height
     });
 
 

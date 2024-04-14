@@ -15,7 +15,7 @@
 // color/ task ID map
 //
 //  ID var              ID var             ID var                ID var
-//   0 c2d_x_color_0     9 LAUNCH          18                    27 reserved (memcpy)
+//   0 c2d_x_color_0     9                 18                    27 reserved (memcpy)
 //   1 c2d_x_color_1    10 c2d_x_entrypt_0 19                    28 reserved (memcpy)
 //   2                  11 c2d_x_entrypt_1 20                    29 reserved
 //   3                  12 c2d_y_entrypt_0 21 reserved (memcpy)  30 reserved (memcpy)
@@ -35,7 +35,6 @@ const c2d_x_color_0: color = @get_color(0);
 const c2d_x_color_1: color = @get_color(1);
 const c2d_y_color_0: color = @get_color(4);
 const c2d_y_color_1: color = @get_color(5);
-const LAUNCH:        color = @get_color(9); // Color used by memcpy for kernel launch
 
 // Task IDs
 const c2d_x_entrypt_0: local_task_id = @get_local_task_id(10);
@@ -48,10 +47,9 @@ const task_y_id:       local_task_id = @get_local_task_id(16);
 const c2d = @import_module("<collectives_2d/params>");
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = Pw,
-    .height = Ph,
-    .LAUNCH = LAUNCH
-    });
+  .width = Pw,
+  .height = Ph
+});
 
 layout {
   @set_rectangle(Pw, Ph);

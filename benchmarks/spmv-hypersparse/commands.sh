@@ -2,7 +2,7 @@
 
 set -e
 
-cslc ./layout.csl --fabric-dims=11,6 --fabric-offsets=4,1 --params=LAUNCH_ID:0 \
+cslc ./layout.csl --fabric-dims=11,6 --fabric-offsets=4,1 \
 --params=ncols:16 --params=nrows:16 --params=pcols:4 --params=prows:4 --params=max_local_nnz:8 \
 --params=max_local_nnz_cols:4 --params=max_local_nnz_rows:4 --params=local_vec_sz:1 \
 --params=local_out_vec_sz:1 --params=y_pad_start_row_idx:4 -o=out \

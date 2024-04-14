@@ -13,8 +13,6 @@
 // limitations under the License.
 
 
-param LAUNCH_ID: i16;
-
 // c0,c1,c2,c3,c4,c5,c6,c7 are internal colors of 7-point stencil
 param C0_ID: i16;
 param C1_ID: i16;
@@ -32,8 +30,6 @@ param width: i16 ; // width of the core
 param height: i16 ; // height of the core
 
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
-
-const LAUNCH: color = @get_color(LAUNCH_ID);
 
 const C0: color = @get_color(C0_ID);
 const C1: color = @get_color(C1_ID);
@@ -76,7 +72,6 @@ const reduce = @import_module( "../csl-libs/allreduce/layout.csl", .{
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = width,
     .height = height,
-    .LAUNCH = LAUNCH
     });
 
 layout{
@@ -89,9 +84,6 @@ layout{
     @comptime_assert(C5_ID < C6_ID);
     @comptime_assert(C6_ID < C7_ID);
     @comptime_assert(C7_ID < C8_ID);
-    @comptime_assert(C8_ID < LAUNCH_ID);
-
-    @comptime_assert(LAUNCH_ID < 14);
 
     // step 1: configure the rectangle which does not include halo
     @set_rectangle( width, height );

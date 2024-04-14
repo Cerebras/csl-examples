@@ -629,8 +629,6 @@ task f_dispatch() void {
 
 
 comptime {
-    // last PE uses a microthread to receive data
-    @block(C_ROUTE);
     @bind_control_task( f_send_ctrl, C_SEND_CTRL);
     @bind_control_task( f_send_data, C_SEND_DATA);
     @bind_control_task( f_state_entry, C_STATE_ENTRY);

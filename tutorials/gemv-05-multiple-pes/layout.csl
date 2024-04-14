@@ -19,12 +19,9 @@ param N: i16;
 // number of PEs in program
 param width: i16;
 
-const LAUNCH: color = @get_color(8);
-
 const memcpy = @import_module("<memcpy/get_params>", .{
   .width = width,
-  .height = 1,
-  .LAUNCH = LAUNCH
+  .height = 1
 });
 
 layout {

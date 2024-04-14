@@ -4,7 +4,7 @@ Topic 4: Sentinels
 
 In previous programs, we used so-called routable colors, which
 are associated with a route to direct the flow of wavelets.
-On ``wse2``, task IDs which can be associated with routable colors
+On WSE-2, task IDs which can be associated with routable colors
 are in the range 0 through 23.
 This example demonstrates the use of a non-routable control task ID
 to signal the end of an input tensor, thus giving it the name *sentinel*.

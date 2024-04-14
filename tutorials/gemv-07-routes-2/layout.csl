@@ -19,18 +19,11 @@ param N: i16;
 // Colors
 const ax_color: color = @get_color(0); // sends/recvs partial result Ax EAST
 const x_color:  color = @get_color(1); // sends/recvs elems x
-const LAUNCH:   color = @get_color(8); // Color used by memcpy for kernel launch
-
-// Task IDs
-const recv_x_task_id: data_task_id  = @get_data_task_id(x_color); // Task ID for WTT
-const exit_task_id:   local_task_id = @get_local_task_id(9);      // Task ID used by local task
-const reduce_task_id: local_task_id = @get_local_task_id(10);     // Task ID used by local task
 
 // This example uses 2x2 PEs
 const memcpy = @import_module("<memcpy/get_params>", .{
   .width = 2,
-  .height = 2,
-  .LAUNCH = LAUNCH
+  .height = 2
 });
 
 layout {
@@ -44,10 +37,7 @@ layout {
         .M_per_PE = M / 2,
         .N_per_PE = N / 2,
         .ax_color = ax_color,
-        .x_color = x_color,
-        .recv_x_task_id = recv_x_task_id,
-        .exit_task_id = exit_task_id,
-        .reduce_task_id = reduce_task_id
+        .x_color = x_color
       });
     }
   }

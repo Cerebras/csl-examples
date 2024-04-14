@@ -145,7 +145,6 @@ def csl_compile_core(
     core_fabric_offset_y: int,
     use_precompile: bool,
     arch: Optional[str],
-    LAUNCH: int,
     C0: int,
     C1: int,
     C2: int,
@@ -162,7 +161,6 @@ def csl_compile_core(
     args.append(f"--fabric-dims={fabric_width},{fabric_height}")
     args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
     args.append(f"--params=width:{width},height:{height},pe_length:{pe_length}")
-    args.append(f"--params=LAUNCH_ID:{LAUNCH}")
     args.append(f"--params=C0_ID:{C0}")
     args.append(f"--params=C1_ID:{C1}")
     args.append(f"--params=C2_ID:{C2}")
@@ -206,7 +204,7 @@ def hwl_2_oned_colmajor(
 # How to compile:
 #  <path/to/cslc> bw_sync_layout.csl --fabric-dims=12,7 --fabric-offsets=4,1 \
 #    --params=width:5,height:5,pe_length:5 \
-#    --params=LAUNCH_ID:5 --params=C0_ID:0 --params=C1_ID:1 --params=C2_ID:2 \
+#    --params=C0_ID:0 --params=C1_ID:1 --params=C2_ID:2 \
 #    --params=C3_ID:3 --params=C4_ID:4 \
 #    -o=latest --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0
 # or
@@ -300,7 +298,6 @@ def main():
   C2 = 2
   C3 = 3
   C4 = 4
-  LAUNCH = 5
 
   csl_compile_core(
       cslc,
@@ -315,7 +312,6 @@ def main():
       core_fabric_offset_y,
       args.run_only,
       args.arch,
-      LAUNCH,
       C0,
       C1,
       C2,

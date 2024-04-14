@@ -15,7 +15,7 @@
 // color/ task ID map of Mandelbrot + memcpy:
 //
 //  ID var                ID var              ID var                ID var
-//   0 LAUNCH              9 process_task_id  18                    27 reserved (memcpy)
+//   0                     9 process_task_id  18                    27 reserved (memcpy)
 //   1 D2H                10                  19                    28 reserved (memcpy)
 //   2 routing_colors[0]  11                  20                    29 reserved
 //   3 routing_colors[1]  12                  21 reserved (memcpy)  30 reserved (memcpy)
@@ -27,7 +27,6 @@
 //     recv_task_id
 //
 
-param LAUNCH_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
 
 const rectangle_size = 4;
@@ -44,7 +43,6 @@ const y_hi: f32 = 1.5;
 const rows_per_pe = image_height / rectangle_size;
 
 // Colors
-const LAUNCH:           color = @get_color(LAUNCH_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
 
 const routing_colors = [2]color { @get_color(2), @get_color(3) };
@@ -52,7 +50,6 @@ const routing_colors = [2]color { @get_color(2), @get_color(3) };
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = rectangle_size,
     .height = rectangle_size,
-    .LAUNCH = LAUNCH,
     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
     });
 
@@ -105,6 +102,5 @@ layout {
 }
 
 comptime{
-  @comptime_assert(LAUNCH_ID == 0);
   @comptime_assert(MEMCPYD2H_DATA_1_ID == 1);
 }

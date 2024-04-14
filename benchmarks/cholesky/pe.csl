@@ -27,6 +27,12 @@ param col_color: color;
 param main_task_id: local_task_id;
 param cont_task_id: local_task_id;
 
+// Queue IDs
+const col_color_iq = @get_input_queue(2);
+const col_color_oq = @get_output_queue(3);
+const row_color_iq = @get_input_queue(4);
+const row_color_oq = @get_output_queue(5);
+
 const P: i16 = @as(i16, @get_rectangle().height);
 
 const math = @import_module("<math>");
@@ -47,18 +53,18 @@ var col_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> col_buf[i] 
 var row_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> row_buf[i] });
 
 // // Column in/out DSDs
-var col_in = @get_dsd(fabin_dsd, .{ .fabric_color = col_color, .extent = Nt, .input_queue = @get_input_queue(1) });
-var col_out = @get_dsd(fabout_dsd, .{ .fabric_color = col_color, .extent = Nt, .output_queue = @get_output_queue(2) });
+var col_in = @get_dsd(fabin_dsd, .{ .fabric_color = col_color, .extent = Nt, .input_queue = col_color_iq });
+var col_out = @get_dsd(fabout_dsd, .{ .fabric_color = col_color, .extent = Nt, .output_queue = col_color_oq });
 
 // // Row in/out DSDs
-const row_in = @get_dsd(fabin_dsd, .{ .fabric_color = row_color, .extent = Nt, .input_queue = @get_input_queue(3) });
-const row_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = Nt, .output_queue = @get_output_queue(4) });
+const row_in = @get_dsd(fabin_dsd, .{ .fabric_color = row_color, .extent = Nt, .input_queue = row_color_iq });
+const row_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = Nt, .output_queue = row_color_oq });
 
 // // Two wavelets of (ADV + NO_CE, NOP + NO_CE)
 const ctrl_buf = [2]u32 { (5 << 22) | (4 << 25), (5 << 22) | (4 << 25) };
 const ctrl_mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> ctrl_buf[i] });
 const row_ctrl_out = @get_dsd(fabout_dsd, .{ .fabric_color = row_color, .extent = 2,
-                                             .output_queue = @get_output_queue(1), .control = true });
+                                             .output_queue = row_color_oq, .control = true });
 
 var P_left: i16;
 var ti: i16;
@@ -206,10 +212,14 @@ comptime {
   @bind_local_task(main, main_task_id);
   @bind_local_task(cont, cont_task_id);
 
-  @block(col_color);
-  @block(row_color);
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(col_color_iq, .{ .color = col_color });
+    @initialize_queue(col_color_oq, .{ .color = col_color });
+    @initialize_queue(row_color_iq, .{ .color = row_color });
+    @initialize_queue(row_color_oq, .{ .color = row_color });
+  }
 
   @export_symbol(ptr_tile, "tile");
   @export_symbol(f_chol);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

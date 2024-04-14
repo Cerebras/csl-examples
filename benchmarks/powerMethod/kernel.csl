@@ -191,5 +191,4 @@ comptime{
     @export_symbol(f_reference_timestamps);
     @export_symbol(f_nrm2_y);
     @export_symbol(f_scale_x_by_nrm2);
-    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

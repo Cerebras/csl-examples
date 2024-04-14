@@ -100,5 +100,4 @@ fn f_mandelbrot() void {
 comptime{
   @export_symbol(ptr_packet, "packet");
   @export_symbol(f_mandelbrot);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

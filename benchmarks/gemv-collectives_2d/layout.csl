@@ -25,7 +25,7 @@
 //   5 c2d_y_color_1   14 c2d_x_entrypt_0  23 reserved (memcpy) 32
 //   6                 15 c2d_x_entrypt_1  24                   33
 //   7                 16 c2d_y_entrypt_0  25                   34
-//   8 LAUNCH          17 c2d_y_entrypt_1  26                   35
+//   8                 17 c2d_y_entrypt_1  26                   35
 
 // Kernel rectangle of PEs
 param kernel_rows : u16; // Height of kernel
@@ -47,9 +47,6 @@ comptime {
 const Mt: u16 = matrix_rows / kernel_rows; // Number of rows per PE
 const Nt: u16 = matrix_cols / kernel_cols; // Number of columns per PE
 
-// Colors
-const LAUNCH: color = @get_color(8);
-
 // Task IDs
 const EXIT:                     local_task_id = @get_local_task_id(9);
 const scatter_x_task_id:        local_task_id = @get_local_task_id(10);
@@ -59,8 +56,7 @@ const gather_result_task_id:    local_task_id = @get_local_task_id(13);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = kernel_cols,
-    .height = kernel_rows,
-    .LAUNCH = LAUNCH
+    .height = kernel_rows
 });
 
 const c2d = @import_module("<collectives_2d/params>");

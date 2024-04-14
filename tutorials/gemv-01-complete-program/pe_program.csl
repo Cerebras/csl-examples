@@ -80,7 +80,4 @@ comptime {
 
   // Export function so it is host-callable by RPC mechanism
   @export_symbol(init_and_compute);
-
-  // Create RPC server using color LAUNCH
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

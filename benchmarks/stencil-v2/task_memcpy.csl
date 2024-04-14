@@ -688,32 +688,24 @@ task f_comp() void {
 comptime {
   @bind_local_task(sendTask, send);
 
-  // For each of the four direction, we block the color's task from being
-  // activated, since we will be using the fabric input DSD to receive such
-  // wavelets.  In other words, we don't want the wavelets to trigger the
-  // non-existed task for these wavelets.
-  @block(eastChannel);
   @bind_local_task(eastFinTask, eastFin);
 
   const eastRoute = routes.computeRoute(EAST, eastFirst, eastLast,
       eastNotNeedsPos3, eastPatternFirst, eastPatternLast);
   @set_local_color_config(eastChannel, eastRoute);
 
-  @block(westChannel);
   @bind_local_task(westFinTask, westFin);
 
   const westRoute = routes.computeRoute(WEST, westFirst, westLast,
       westNotNeedsPos3, westPatternFirst, westPatternLast);
   @set_local_color_config(westChannel, westRoute);
 
-  @block(southChannel);
   @bind_local_task(southFinTask, southFin);
 
   const southRoute = routes.computeRoute(SOUTH, southFirst, southLast,
       southNotNeedsPos3, southPatternFirst, southPatternLast);
   @set_local_color_config(southChannel, southRoute);
 
-  @block(northChannel);
   @bind_local_task(northFinTask, northFin);
 
   const northRoute = routes.computeRoute(NORTH, northFirst, northLast,
@@ -809,5 +801,4 @@ comptime {
 
     @export_symbol(f_activate_comp);
     @export_symbol(f_prepare_zout);
-    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

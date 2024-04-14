@@ -86,8 +86,6 @@ task process() void {
 comptime {
   @bind_local_task(recv, recv_task_id);
   @bind_local_task(process, process_task_id);
-
-  @block(in_color);
 }
 
 fn f_mandelbrot() void {
@@ -102,5 +100,4 @@ fn f_mandelbrot() void {
 comptime{
   @export_symbol(ptr_packet, "packet");
   @export_symbol(f_mandelbrot);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

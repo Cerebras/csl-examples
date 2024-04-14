@@ -4,6 +4,19 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 1.1.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 1.1.0.
+
+- GEMV tutorials 1 through 8 have been updated to support WSE-2 and WSE-3.
+
+- ``cholesky``, ``FFT``, ``bandwidthTest``, and ``single-tile-matvec``
+  programs have been updated to support WSE-2 and WSE-3.
+
+- New example program introduced to demonstrate WSE-3 features for
+  separation of queue IDs from microthread IDs for asynchronous operations.
+
 Version 1.0.0
 -------------
 

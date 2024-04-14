@@ -17,7 +17,7 @@
 //  ID var                ID var         ID var                ID var
 //   0 MEMCPY_H2D_DATA_1   9             18                    27 reserved (memcpy)
 //   1 MEMCPY_D2H_DATA_1  10             19                    28 reserved (memcpy)
-//   2 LAUNCH             11             20                    29 reserved
+//   2                    11             20                    29 reserved
 //   3                    12             21 reserved (memcpy)  30 reserved (memcpy)
 //   4                    13             22 reserved (memcpy)  31 reserved
 //   5                    14             23 reserved (memcpy)  32
@@ -32,18 +32,16 @@ param MEMCPYD2H_DATA_1_ID: i16;
 // Colors
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-const LAUNCH: color = @get_color(2);
 
 // Task IDs
 const main_task_id: data_task_id = @get_data_task_id(MEMCPYH2D_DATA_1);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = 1,
-    .height = 1,
-    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    .LAUNCH = LAUNCH
-    });
+  .width = 1,
+  .height = 1,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+});
 
 layout {
   @set_rectangle(1, 1);

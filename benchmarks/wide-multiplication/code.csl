@@ -17,7 +17,7 @@
 //  ID var                ID var               ID var                ID var
 //   0 MEMCPY_H2D_DATA_1   9 multiply_task_id  18                    27 reserved (memcpy)
 //   1 MEMCPY_D2H_DATA_1  10                   19                    28 reserved (memcpy)
-//   2 LAUNCH             11                   20                    29 reserved
+//   2                    11                   20                    29 reserved
 //   3                    12                   21 reserved (memcpy)  30 reserved (memcpy)
 //   4                    13                   22 reserved (memcpy)  31 reserved
 //   5                    14                   23 reserved (memcpy)  32
@@ -32,7 +32,6 @@ param MEMCPYD2H_DATA_1_ID : i16;
 // Colors
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID); // Recvs input data
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID); // Signals completion to host
-const LAUNCH:           color = @get_color(2);                   // RPC to setup H2D length
 
 // Task IDs
 const multiply_task_id: local_task_id = @get_local_task_id(9); // Triggers multiply
@@ -48,7 +47,6 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     .height = 1,
     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
     .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    .LAUNCH = LAUNCH,
     });
 
 layout {

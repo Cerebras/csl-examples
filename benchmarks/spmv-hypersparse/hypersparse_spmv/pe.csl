@@ -1886,14 +1886,6 @@ comptime {
     @bind_local_task(tx_west_task, tx_west);
     @bind_local_task(tx_east_task, tx_east);
 
-    // block all colors since we will be rx/tx'ing through uthreads.
-    @block(north_train);
-    @block(south_train);
-    @block(rx_west_train);
-    @block(rx_east_train);
-    @block(tx_west_train);
-    @block(tx_east_train);
-
 } // comptime
 
 

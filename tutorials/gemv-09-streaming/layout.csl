@@ -32,7 +32,6 @@ const x_color:          color = @get_color(5); // sends/recvs elems x
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-const LAUNCH:           color = @get_color(8); // Color used by memcpy for kernel launch
 
 // Task IDs
 const recv_x_task_id:        data_task_id  = @get_data_task_id(x_color); // Task ID for WTT
@@ -46,8 +45,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{
   .height = kernel_y_dim,
   .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
   .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
-  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-  .LAUNCH = LAUNCH
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
 });
 
 layout {

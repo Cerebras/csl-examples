@@ -22,10 +22,24 @@ param N_per_PE: i16;
 param ax_color: color; // sends partial result Ax EAST
 param x_color:  color; // sends elems x SOUTH/ recvs elems x from NORTH
 
-// Task IDs
-param recv_x_task_id: data_task_id;  // Task ID for data task recv_x, consumes x_color wlts
-param exit_task_id:   local_task_id; // Task ID used by exit task to unblock cmd stream
-param reduce_task_id: local_task_id; // Task ID used by reduce task
+// Queue IDs
+const ax_color_oq: output_queue = @get_output_queue(2);
+const ax_color_iq: input_queue  = @get_input_queue(2);
+const x_color_oq:  output_queue = @get_output_queue(3);
+const x_color_iq:  input_queue  = @get_input_queue(3);
+
+// Task ID used by exit task to unblock cmd stream
+const exit_task_id:   local_task_id = @get_local_task_id(9);
+
+// Task ID used by reduce task
+const reduce_task_id: local_task_id = @get_local_task_id(10);
+
+// Data task ID for task recv_x, consumes x_color wlts
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+const recv_x_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(x_color)
+  else if (@is_arch("wse3")) @get_data_task_id(x_color_iq);
+
 
 // memcpy module provides infrastructure for copying data
 // and launching functions from the host
@@ -65,7 +79,7 @@ task reduce() void {
   if (is_left_col()) {
     const out_dsd = @get_dsd(fabout_dsd, .{
                       .fabric_color = ax_color, .extent = M_per_PE,
-                      .output_queue = @get_output_queue(1)
+                      .output_queue = ax_color_oq
                     });
     // After fmovs is done, activate exit_task to unblock cmd stream
     @fmovs(out_dsd, y_dsd, .{ .async = true, .activate = exit_task_id });
@@ -73,7 +87,7 @@ task reduce() void {
   } else {
     const in_dsd = @get_dsd(fabin_dsd, .{
                      .fabric_color = ax_color, .extent = M_per_PE,
-                     .input_queue = @get_input_queue(1)
+                     .input_queue  = ax_color_iq
                    });
     // After fadds is done, activate exit_task to unblock cmd stream
     @fadds(y_dsd, y_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
@@ -101,7 +115,7 @@ fn compute() void {
   if (is_top_row()) {
     const send_x_dsd = @get_dsd(fabout_dsd, .{
                          .fabric_color = x_color, .extent = N_per_PE,
-                         .output_queue = @get_output_queue(2)
+                         .output_queue = x_color_oq
                        });
     @fmovs(send_x_dsd, x_dsd, .{ .async = true });
   }
@@ -117,17 +131,24 @@ comptime {
   // When exit_task_id is activated, exit_task will execute
   @bind_local_task(exit_task, exit_task_id);
 
-  // recv_x is wavelet-triggered task (WTT)
-  // activated by receiving wavelets along color x_color,
-  // which corresponds to recv_x_task_id
-  @bind_data_task(recv_x, recv_x_task_id);
-
   // reduce is local task activated by ID reduce_task_ID
   @bind_local_task(reduce, reduce_task_id);
+
+  // recv_x is wavelet-triggered task (WTT) activated by receiving
+  // wavelets along color x_color, which corresponds to recv_x_task_id
+  // On WSE-3, these wavelets are received in input queue x_color_iq
+  @bind_data_task(recv_x, recv_x_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(ax_color_oq, .{ .color = ax_color });
+    @initialize_queue(ax_color_iq, .{ .color = ax_color });
+    @initialize_queue(x_color_oq,  .{ .color = x_color });
+    @initialize_queue(x_color_iq,  .{ .color = x_color });
+  }
 
   @export_symbol(A_ptr, "A");
   @export_symbol(x_ptr, "x");
   @export_symbol(y_ptr, "y");
   @export_symbol(compute);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

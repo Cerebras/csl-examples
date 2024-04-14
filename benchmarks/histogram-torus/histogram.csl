@@ -184,6 +184,7 @@ fn repack_wavelet_hop_horizontal(wavelety:u32) u32 {
 const tally = @import_module("<kernels/tally/pe>",
   @concat_structs(tally_params, .{
     .output_queues=[2]u16{4, 5}, // we use 0-3 above
+    .input_queues=[2]u16{6, 7}, // output queues use 0,1,2,3,4,5
     .callback = TALLY_EXIT
   }));
 
@@ -289,5 +290,4 @@ comptime{
   @export_symbol(ptr_inputs, "inputs");
   @export_symbol(ptr_buckets, "buckets");
   @export_symbol(f_run);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

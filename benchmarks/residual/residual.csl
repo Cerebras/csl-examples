@@ -276,5 +276,4 @@ comptime {
     @export_symbol(ptr_nrm, "nrm");
 
     @export_symbol(bcast_x);
-    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

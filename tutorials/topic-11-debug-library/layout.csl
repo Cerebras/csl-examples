@@ -23,7 +23,7 @@
 //   5             14         23 reserved (memcpy)  32
 //   6 H2D         15         24                    33
 //   7 D2H         16         25                    34
-//   8 LAUNCH      17         26                    35
+//   8             17         26                    35
 //
 
 param width : u16;
@@ -35,7 +35,6 @@ param MEMCPYD2H_DATA_1_ID: i16;
 // Colors
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-const LAUNCH:           color = @get_color(8);
 
 const red:              color = @get_color(0);
 const blue:             color = @get_color(1);
@@ -46,12 +45,11 @@ const red_task_id:  data_task_id = @get_data_task_id(red);
 const blue_task_id: data_task_id = @get_data_task_id(blue);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = width,
-    .height = 1,
-    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    .LAUNCH = LAUNCH,
-    });
+  .width = width,
+  .height = 1,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+});
 
 layout {
   @set_rectangle(width, 1);

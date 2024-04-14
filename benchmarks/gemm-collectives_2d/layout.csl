@@ -23,7 +23,7 @@
 //   5 c2d_y_color_1    14 x_task_id        23 reserved (memcpy)  32
 //   6                  15 y_task_id        24                    33
 //   7                  16 c2d_y_entrypt_0  25                    34
-//   8 LAUNCH           17 c2d_y_entrypt_1  26                    35
+//   8                  17 c2d_y_entrypt_1  26                    35
 
 // Program rectangle is P x P
 param P: u16;
@@ -33,9 +33,6 @@ param Mt: u16;
 param Kt: u16;
 param Nt: u16;
 
-// Colors
-const LAUNCH: color = @get_color(8);
-
 // Task IDs
 const EXIT:            local_task_id = @get_local_task_id(9);
 const compute_task_id: local_task_id = @get_local_task_id(12);
@@ -44,8 +41,7 @@ const y_task_id:       local_task_id = @get_local_task_id(15);
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = P,
-    .height = P,
-    .LAUNCH = LAUNCH
+    .height = P
 });
 
 const c2d = @import_module("<collectives_2d/params>");

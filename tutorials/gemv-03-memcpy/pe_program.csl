@@ -65,5 +65,4 @@ comptime {
   @export_symbol(b_ptr, "b");
   @export_symbol(y_ptr, "y");
   @export_symbol(init_and_compute);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

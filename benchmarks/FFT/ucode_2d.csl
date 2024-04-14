@@ -26,6 +26,12 @@ const transposeRL_task_id: local_task_id = @get_local_task_id(13);
 const sentinelLR_task_id:  local_task_id = @get_local_task_id(16);
 const sentinelRL_task_id:  local_task_id = @get_local_task_id(17);
 
+// Queue IDs
+const LR_recv_iq = @get_input_queue(2);
+const LR_send_oq = @get_output_queue(3);
+const RL_recv_iq = @get_input_queue(4);
+const RL_send_oq = @get_output_queue(5);
+
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // Problem size
@@ -75,10 +81,10 @@ const ARRAY_LEN = DEPTH*BRICK_LEN; // 2 as complex+real
 
 var X = @zeros([ARRAY_LEN]tensor_type);
 var X_transposed = @zeros([ARRAY_LEN]tensor_type);
-var f = @zeros([Nz]tensor_type);
+var f_twiddle = @zeros([Nz]tensor_type);
 
 var ptr_X: [*]tensor_type = &X;
-var ptr_f: [*]tensor_type = &f;
+var ptr_f_twiddle: [*]tensor_type = &f_twiddle;
 
 // Sentinel data for a sequence of NOP_NOCE and ADVANCE_NOCE
 var sentinel_data = @constants([2]u32, 0x8b009249);
@@ -108,21 +114,21 @@ const sendRightData_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{TRANS_LEN}
 // Here we send elements from N-2 to 0. Once again, technically only elements from PE_X-1 to 0 are necessary.
 // Therefore, each PE sends N-1 elements on each color.
 const sendLR_dsd = @get_dsd(fabout_dsd, .{ .extent = TRANS_LEN, .fabric_color = LR_color,
-                                           .output_queue = @get_output_queue(2) });
+                                           .output_queue = LR_send_oq });
 const sendRL_dsd = @get_dsd(fabout_dsd, .{ .extent = TRANS_LEN, .fabric_color = RL_color,
-                                           .output_queue = @get_output_queue(3) });
+                                           .output_queue = RL_send_oq });
 
 // Each PE receives as many bricks in each direction as PEs are in that direction
 const recvLR_dsd = @get_dsd(fabin_dsd,  .{ .extent = PE_X0*BRICK_WAVELETS, .fabric_color = LR_color,
-                                           .input_queue = @get_input_queue(0) });
+                                           .input_queue = LR_recv_iq });
 const recvRL_dsd = @get_dsd(fabin_dsd,  .{ .extent = REV_PE_X*BRICK_WAVELETS, .fabric_color = RL_color,
-                                           .input_queue = @get_input_queue(1) });
+                                           .input_queue = RL_recv_iq });
 
 // DSDs to send control wavelets to advance switches. We need to advance 2 positions, thus send 2 sentinels.
 const sentinelLR_dsd = @get_dsd(fabout_dsd, .{ .extent = 2, .fabric_color = LR_color, .control = true,
-                                               .output_queue = @get_output_queue(2) });
+                                               .output_queue = LR_send_oq });
 const sentinelRL_dsd = @get_dsd(fabout_dsd, .{ .extent = 2, .fabric_color = RL_color, .control = true,
-                                               .output_queue = @get_output_queue(3) });
+                                               .output_queue = RL_send_oq });
 
 // DSD describing the DSD that contains the payload of the control wavelets.
 const sentinelData_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> sentinel_data[i]});
@@ -144,7 +150,7 @@ var inv_mode: bool;
 fn f_fft() void {
   inv_mode = false;
 
-  mod.fft(&f);
+  mod.fft(&f_twiddle);
 
   // Initiate the Data Transpose
   if (WIDTH > 0) {
@@ -168,7 +174,7 @@ fn f_fft() void {
 fn f_ifft() void {
   inv_mode = true;
 
-  mod.ifft(&f);
+  mod.ifft(&f_twiddle);
 
   // Initiate the Data Transpose
   if (WIDTH > 0) {
@@ -250,9 +256,6 @@ task f_exit() void {
 
 
 comptime {
-  @block(LR_color);
-  @block(RL_color);
-
   @bind_local_task(f_exit, EXIT);
   @bind_local_task(transposeLR, transposeLR_task_id);
   @bind_local_task(transposeRL, transposeRL_task_id);
@@ -262,50 +265,60 @@ comptime {
 
   if (PE_X == 0) {
      @set_local_color_config(LR_color, .{
-                             .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST }, .pop_mode = .{.always_pop = true} },
-                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                             .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST } },
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true},
+                             .switches = .{.pop_mode = .{.always_pop = true}}
                             });
      @set_local_color_config(RL_color, .{
-                             .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true} },
-                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                             .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP } },
+                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true},
+                             .switches = .{.pop_mode = .{.always_pop = true}}
                             });
 
   } else if (PE_X == WIDTHm1) { //LAST PE
     @set_local_color_config(LR_color, .{
-                            .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP }, .pop_mode = .{.always_pop = true} },
-                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
+                            .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } },
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true},
+                            .switches = .{.pop_mode = .{.always_pop = true}}
                           });
     @set_local_color_config(RL_color, .{
-                            .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST }, .pop_mode = .{.always_pop = true} },
-                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
+                            .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } },
+                            .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true},
+                            .switches = .{.pop_mode = .{.always_pop = true}}
                           });
 
   } else { // PEs in the MIDDLE
     if (PE_X == 1) {
       @set_local_color_config(LR_color, .{
-                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pop_mode = .{.always_pop = true} },
-                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP } },
+                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST } },
+                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true} },
                               .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = 0, .count_data = true, .count_control = false, .fast_mode = true}
                             });
     } else {
       @set_local_color_config(LR_color, .{
-                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST }, .pop_mode = .{.always_pop = true} },
-                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP } },
+                              .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP, EAST } },
+                              .switches = .{ .pos1 = .{ .tx = EAST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true} },
                               .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-PE_X)*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
                             });
     }
 
     @set_local_color_config(RL_color, .{
-                            .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP, WEST }, .pop_mode = .{.always_pop = true} },
-                            .switches = .{ .pos1 = .{ .tx = WEST }, .pos2 = .{ .rx = RAMP } },
+                            .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP, WEST } },
+                            .switches = .{ .pos1 = .{ .tx = WEST }, .pos2 = .{ .rx = RAMP }, .pop_mode = .{.always_pop = true} },
                             .filter = .{ .kind = .{.counter = true}, .limit1 =TRANS_LEN-1, .max_counter =BRICK_WAVELETS-1, .init_counter = (DEPTH-(PE_X+1))*BRICK_WAVELETS, .count_data = true, .count_control = false, .fast_mode = true}
                           });
   }
 
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(LR_recv_iq, .{ .color = LR_color });
+    @initialize_queue(LR_send_oq, .{ .color = LR_color });
+    @initialize_queue(RL_recv_iq, .{ .color = RL_color });
+    @initialize_queue(RL_send_oq, .{ .color = RL_color });
+  }
 
   @export_symbol(ptr_X, "X");
-  @export_symbol(ptr_f, "f");
+  @export_symbol(ptr_f_twiddle, "f_twiddle");
   @export_symbol(f_fft);
   @export_symbol(f_ifft);
-  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }

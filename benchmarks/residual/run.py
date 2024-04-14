@@ -144,7 +144,6 @@ def csl_compile(
     core_fabric_offset_y: int,
     compile_flag: bool,
     arch: Optional[str],
-    LAUNCH: int,
     LOCAL_OUT_SZ: int,
     LOCAL_IN_SZ: int,
     n_channels: int,
@@ -163,8 +162,6 @@ def csl_compile(
     args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}") # options
     args.append(f"--params=width:{width},height:{height}") # options
     args.append(f"--params=LOCAL_OUT_SZ:{LOCAL_OUT_SZ},LOCAL_IN_SZ:{LOCAL_IN_SZ}") # options
-
-    args.append(f"--params=LAUNCH_ID:{LAUNCH}") # options
 
     args.append(f"-o={comp_dir}")
     if arch is not None:
@@ -252,8 +249,6 @@ def main():
   print(f"core_fabric_offset_x = {core_fabric_offset_x}, ")
   print(f"core_fabric_offset_y = {core_fabric_offset_y}")
 
-  LAUNCH = 4
-
   # compile csl files and generate compilation ELFs
   csl_compile(
       args.cslc,
@@ -267,7 +262,6 @@ def main():
       core_fabric_offset_y,
       args.compile,
       args.arch,
-      LAUNCH,
       LOCAL_OUT_SZ,
       LOCAL_IN_SZ,
       n_channels,

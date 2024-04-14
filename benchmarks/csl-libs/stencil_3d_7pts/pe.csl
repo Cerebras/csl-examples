@@ -624,13 +624,6 @@ task f_comm() void {
 }
 
 comptime {
-
-    // use microthreads to receive the data
-    @block(c_recv_west);
-    @block(c_recv_east);
-    @block(c_recv_south);
-    @block(c_recv_north);
-
     @bind_local_task(f_send, SEND);
     @bind_local_task(f_recv, RECV);
     @bind_local_task(f_comm, COMM);

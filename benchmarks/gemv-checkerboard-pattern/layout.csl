@@ -15,7 +15,7 @@
 // color/ task ID map of histogram-torus + memcpy:
 //
 //  ID var     ID var     ID var                ID var
-//   0          9 LAUNCH  18                    27 reserved (memcpy)
+//   0          9         18                    27 reserved (memcpy)
 //   1 x_in    10 H2D_1   19                    28 reserved (memcpy)
 //   2         11 H2D_2   20                    29 reserved
 //   3 ax_out  12 D2H     21 reserved (memcpy)  30 reserved (memcpy)
@@ -38,7 +38,6 @@
 param MEMCPYH2D_DATA_1_ID: i16;
 param MEMCPYH2D_DATA_2_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
-param LAUNCH_ID: i16;
 
 // Program uses 4x4 rectangle of PEs
 param kernel_rows : i16; // Height of kernel
@@ -49,7 +48,6 @@ param matrix_rows : i16; // Height of matrix
 param matrix_cols : i16; // Width of matrix
 
 // Colors
-const LAUNCH:           color = @get_color(LAUNCH_ID);
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
@@ -85,8 +83,7 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     .height = kernel_rows,
     .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
     .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    .LAUNCH = LAUNCH
+    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
     });
 
 layout {

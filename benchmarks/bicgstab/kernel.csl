@@ -344,6 +344,4 @@ comptime{
 
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
-
-    @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }
