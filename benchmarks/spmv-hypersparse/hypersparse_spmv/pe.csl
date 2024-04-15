@@ -1910,7 +1910,6 @@ comptime {
       .routes= .{
         .rx = .{ SOUTH },
         .tx = .{ RAMP, NORTH },
-        .pop_mode = .{ .pop_on_advance = true },
       },
       .switches=.{
         .pos1 = .{ .tx = NORTH },   // first change tx to just north
@@ -1918,6 +1917,7 @@ comptime {
         .pos3 = .{ .invalid = true },
         .ring_mode = false,
         .current_switch_pos = 0,
+        .pop_mode = .{ .pop_on_advance = true },
        },
     };
 
@@ -1938,7 +1938,6 @@ comptime {
       .routes= .{
         .rx = .{ NORTH },
         .tx = .{ RAMP, SOUTH },
-        .pop_mode = .{ .pop_on_advance = true },
        },
       .switches=.{
         .pos1 = .{ .tx = SOUTH },   // first change tx to just north
@@ -1946,6 +1945,7 @@ comptime {
         .pos3 = .{ .invalid = true },
         .ring_mode = false,
         .current_switch_pos = 0,
+        .pop_mode = .{ .pop_on_advance = true },
        },
     };
     const south_train_route_first_row = .{  // no switching

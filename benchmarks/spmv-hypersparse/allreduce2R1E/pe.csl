@@ -935,12 +935,11 @@ comptime {
         .routes= .{
             .rx = .{ WEST },
             .tx = .{ EAST },
-            //.pop_mode = .{ .always_pop = true },
-            .pop_mode = .{ .pop_on_advance = true },
         },
         .switches=.{
             .pos1 = .{ .rx = RAMP },
             .ring_mode = true,
+            .pop_mode = .{ .pop_on_advance = true },
         },
         .teardown = true
     };
