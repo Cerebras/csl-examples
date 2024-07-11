@@ -1,5 +1,3 @@
-.. _benchmark-residual-memcpy:
-
 Residual
 ========
 

@@ -1,0 +1,52 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+fn min(a: u16, b: u16) u16 {
+  if (a < b) {
+    return a;
+  }
+  return b;
+}
+
+fn computeRelativePeId(peId: u16, peCount: u16, dir: direction) u16 {
+  if (dir == EAST or dir == SOUTH) {
+    return peId;
+  }
+  if (dir == WEST or dir == NORTH) {
+    return peCount - peId - 1;
+  }
+  @comptime_assert(false);
+}
+
+fn computeChunks(zDim: u16) i16 {
+  // We observe that given the memory consumption of the program on chip, the
+  // maximum number of Z-dimension values that we can allocate on chip is about
+  // 400.  The following line splits the requested Z dimension into multiple
+  // chunks of the requested size exceeds 400.
+  return 1 + zDim / 401;
+}
+
+fn computeChunkSize(zDim: u16, numChunks: u16) u16 {
+  // If the number of chunks cleanly divides the number of elements in the Z
+  // dimension, then use the result of the division as the size of the chunks.
+  if (zDim % numChunks == 0) {
+    return zDim / numChunks;
+  }
+
+  // Otherwise, bump up the chunk size by one.  Note that increasing the chunk
+  // size by one is better than increasing the number of chunks by one, since
+  // each new chunk introduces a non-trivial overhead due to the need to perform
+  // another round of communication with each neighbor.
+  return 1 + zDim / numChunks;
+}

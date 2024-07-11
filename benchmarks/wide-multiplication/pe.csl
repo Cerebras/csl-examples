@@ -14,30 +14,40 @@
 
 param memcpy_params: comptime_struct;
 
-// Task IDs
-param multiply_task_id: local_task_id; // Entrypt to trigger computation at end of input data
-param h2d_1_task_id:    data_task_id;  // Data task recvTask recvs wlts along MEMCPYH2D_DATA_1
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 // The number of bits to use for the result.  Inputs, also, use the same bits.
 // Since overflow, if any, is ignored, set the bits to be large enough so that
 // the computation doesn't overflow for the numbers you care about.
-param numBits: u16;
+param num_bits: u16;
+
+// Queue IDs
+const h2d_1_iq: input_queue  = @get_input_queue(2);
+const d2h_1_oq: output_queue = @get_output_queue(3);
+
+// Task IDs
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+// Data task recv_task recvs wlts along MEMCPYH2D_DATA_1
+const h2d_1_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_1)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_1_iq);
+
+// Entrypt to trigger computation at end of input data
+const multiply_task_id: local_task_id = @get_local_task_id(9);
 
 // Size of a 16-bit unsigned integer, in bits.
-const wordSize = 16;
+const word_size = 16;
 
 var num_wvlts: i16 = 0;
 var recv_wvlts: i16 = 0;
 
 comptime {
   // Ensure that the number of bits is indeed a multiple of the word size.
-  @comptime_assert(numBits % wordSize == 0);
+  @comptime_assert(num_bits % word_size == 0);
 }
 
 // The number of 16-bit words that we will use to store the numeric values.
-const words = numBits / wordSize;
-
-const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+const words = num_bits / word_size;
 
 // Initialize both operands and result with zeros.
 var x = @zeros([words]u16);
@@ -46,18 +56,18 @@ var result = @zeros([words]u16);
 
 var ptr_result : [*]u16 = &result;
 
-fn willAddOverflow(left: u16, right: u16, carryFlag: bool) bool {
+fn will_add_overflow(left: u16, right: u16, carryFlag: bool) bool {
   const carry = @as(u16, carryFlag);
   return (left + right < left) or (left + right + carry < left + right);
 }
 
 task multiply() void {
-  var wordIndex:u16 = 0;
-  var wordOffset:u16 = 0;
+  var word_index: u16 = 0;
+  var word_offset: u16 = 0;
 
   // Loop over all bits in all words of the RHS (`y`) value
-  while (wordIndex < words) {
-    if ((y[wordIndex] & (@as(u16, 1) << wordOffset)) != 0) {
+  while (word_index < words) {
+    if ((y[word_index] & (@as(u16, 1) << word_offset)) != 0) {
 
       var carryBit = false;
 
@@ -65,7 +75,7 @@ task multiply() void {
       var idx:u16 = 0;
 
       while (idx < words) : (idx += 1) {
-        const newCarryBit = willAddOverflow(x[idx], result[idx], carryBit);
+        const newCarryBit = will_add_overflow(x[idx], result[idx], carryBit);
 
         // Since `result` is of type u16, the addition is truncated to 16 bits
         result[idx] += x[idx] + @as(u16, carryBit);
@@ -88,32 +98,32 @@ task multiply() void {
     }
 
     // update counters to point to the next bit
-    if (wordOffset == 15) {
-      wordOffset = 0;
-      wordIndex += 1;
+    if (word_offset == 15) {
+      word_offset = 0;
+      word_index += 1;
     } else {
-      wordOffset += 1;
+      word_offset += 1;
     }
   }
 
   // DSD to send the output to the fabric via streaming D2H.
-  const outDsd = @get_dsd(fabout_dsd, .{
+  const out_dsd = @get_dsd(fabout_dsd, .{
     .extent = words,
     .fabric_color = sys_mod.MEMCPYD2H_1,
-    .output_queue = @get_output_queue(1)
+    .output_queue = d2h_1_oq
   });
 
-  const dataDsd = @get_dsd(mem1d_dsd, .{
+  const data_dsd = @get_dsd(mem1d_dsd, .{
     .tensor_access = |i|{words} -> result[i]
   });
 
   // WARNING: use async to allow memcpy's code to run while
-  // output queue 1 is full
-  @mov16(outDsd, dataDsd, .{ .async = true });
+  // output queue d2h_1_oq is full
+  @mov16(out_dsd, data_dsd, .{ .async = true });
 }
 
 // Store the received word in the value at the appropriate offset
-task recvTask(data: u16, index: u16) void {
+task recv_task(data: u16, index: u16) void {
   // Using the index allows a single color to be used for
   // initializing both X and Y tensors
   if (index < words) {
@@ -122,14 +132,9 @@ task recvTask(data: u16, index: u16) void {
     y[index - words] = data;
   }
   recv_wvlts += 1;
-  if (recv_wvlts == num_wvlts){
+  if (recv_wvlts == num_wvlts) {
     @activate(multiply_task_id);
   }
-}
-
-comptime {
-  @bind_data_task(recvTask, h2d_1_task_id);
-  @bind_local_task(multiply, multiply_task_id);
 }
 
 // setup the length of H2D "num_wvlts"
@@ -140,7 +145,16 @@ fn f_run(h2d_num_wvlts: i16) void {
   sys_mod.unblock_cmd_stream();
 }
 
-comptime{
+comptime {
+  @bind_data_task(recv_task, h2d_1_task_id);
+  @bind_local_task(multiply, multiply_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_1_iq, .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(d2h_1_oq, .{ .color = sys_mod.MEMCPYD2H_1 });
+  }
+
   @export_symbol(ptr_result, "result_");
   @export_symbol(f_run);
 }

@@ -1,7 +1,7 @@
 CSL Examples
 ============
 
-Register for access to the Cerebras SDK `here <https://www.cerebras.net/homepage-landing/developers/sdk-request/>`_.
+Register to access the Cerebras SDK `here <https://www.cerebras.net/homepage-landing/developers/sdk-request/>`_.
 Documentation for the SDK can be found `here <https://sdk.cerebras.net>`_.
 
 This repository contains examples of CSL code. Each example has the following
@@ -35,7 +35,7 @@ This is the place to start.
 There are 10 tutorials which teach basic CSL language features and
 ``SdkRuntime`` host runtime features by building up an increasingly
 complex code to compute a GEMV.
-There are an additional 12 tutorial examples which illustrate
+There are an additional 15 tutorial examples which illustrate
 specific language features,
 and 3 tutorial examples which build an increasingly complex
 pipelined computation.
@@ -95,9 +95,9 @@ Branches
 
 For each release of the SDK, there is a corresponding release tag in this
 repository which contains a version of the CSL examples which are compatible
-with that SDK release. For example, the tag ``rel-sdk-1.1.0`` in this
+with that SDK release. For example, the tag ``rel-sdk-1.2.0`` in this
 repository contains a version of the CSL examples which will work (compile and
-simulate) with the SDK 1.1.0 release. The ``master`` branch is identical to the
+simulate) with the SDK 1.2.0 release. The ``master`` branch is identical to the
 newest release.
 
 Full backward compatibility of the SDK is not guaranteed.

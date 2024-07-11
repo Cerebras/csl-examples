@@ -58,8 +58,8 @@ tensors = np.concatenate([intToWords(left), intToWords(right)])
 # Parse the compile metadata
 with open(f"{dirname}/out.json", encoding="utf-8") as json_file:
   compile_data = json.load(json_file)
-params = compile_data["params"]
 
+params = compile_data["params"]
 MEMCPYH2D_DATA_1 = int(params["MEMCPYH2D_DATA_1_ID"])
 MEMCPYD2H_DATA_1 = int(params["MEMCPYD2H_DATA_1_ID"])
 print(f"MEMCPYH2D_DATA_1 = {MEMCPYH2D_DATA_1}")
@@ -75,30 +75,22 @@ print("call f_run to setup the number of H2D wavelets")
 runner.launch("f_run", np.int16(tensors.size), nonblock=False)
 
 print("streaming H2D: the kernel computes and sends out the result when H2D is done")
-# "tensors" is an 1d array of size 32
-# The type of tensors is uint16, we need to extend it to uint32
-# There are two kind of extension when using the utility function input_array_to_u32
-#    input_array_to_u32(np_arr: np.ndarray, sentinel: Optional[int], fast_dim_sz: int)
-# 1) zero extension:
-#    sentinel = None
-# 2) upper 16-bit is the index of the array:
-#    sentinel is Not None
-tensors_u32 = input_array_to_u32(tensors, 1, tensors.size)
-runner.memcpy_h2d(MEMCPYH2D_DATA_1, tensors_u32, 0, 0, 1, 1, tensors_u32.size,\
+input_tensor_u32 = input_array_to_u32(tensors, 1, tensors.size)
+runner.memcpy_h2d(MEMCPYH2D_DATA_1, input_tensor_u32, 0, 0, 1, 1, input_tensor_u32.size, \
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
 print("streaming D2H")
 # The D2H buffer must be of type u32
-out_tensors_u32 = np.zeros(16, np.uint32)
-runner.memcpy_d2h(out_tensors_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, 16, \
+output_tensor_u32 = np.zeros(16, np.uint32)
+runner.memcpy_d2h(output_tensor_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, 16, \
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 # remove upper 16-bit of each u32
-out_tensors = memcpy_view(out_tensors_u32, tensors.dtype)
+out_tensor = memcpy_view(output_tensor_u32, tensors.dtype)
 
 runner.stop()
 
 # Read the result from the output
-result = wordsToInt(out_tensors)
+result = wordsToInt(out_tensor)
 
 print("****************")
 print(f"{hex(left)} * {hex(right)} is {hex(result)}")

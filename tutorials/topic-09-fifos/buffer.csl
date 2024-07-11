@@ -1,0 +1,101 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Nubmer of elements received from MEMCPY_H2D_1
+param num_elems_to_process: i16;
+
+// Colors
+param loopback_color: color;
+
+// Queue IDs
+const h2d_data_1_iq: input_queue  = @get_input_queue(2);
+const d2h_data_1_oq: output_queue = @get_output_queue(3);
+const loopback_iq:   input_queue  = @get_input_queue(4);
+const loopback_oq:   output_queue = @get_output_queue(5);
+
+// Task IDs
+// Data task process_task triggered by wlts along loopback_color
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+const process_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(loopback_color)
+  else if (@is_arch("wse3")) @get_data_task_id(loopback_iq);
+
+const main_task_id: local_task_id = @get_local_task_id(8);
+
+var fifo_buffer = @zeros([1024]f32);
+const fifo = @allocate_fifo(fifo_buffer);
+
+const in_dsd = @get_dsd(fabin_dsd, .{
+  .extent = num_elems_to_process,
+  .fabric_color = sys_mod.MEMCPYH2D_1,
+  .input_queue = h2d_data_1_iq
+});
+
+const loopback_dsd = @get_dsd(fabout_dsd, .{
+  .extent = num_elems_to_process,
+  .fabric_color = loopback_color,
+  .output_queue = loopback_oq
+});
+
+const ten = [1]f32 { 10.0 };
+const ten_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{num_elems_to_process} -> ten[0]});
+
+task main_task() void {
+  // Move from the fabric to the FIFO
+  // adding 10.0 to each element at the same time
+  @fadds(fifo, in_dsd, ten_dsd, .{ .async = true });
+
+  // Move from the FIFO to a process_task
+  // negating values at the same time
+  @fnegs(loopback_dsd, fifo, .{ .async = true });
+}
+
+const out_dsd = @get_dsd(fabout_dsd, .{
+  .extent = 1,
+  .fabric_color = sys_mod.MEMCPYD2H_1,
+  .output_queue = d2h_data_1_oq
+});
+
+var elem = @zeros([1]f32);
+const elem_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{1} -> elem[0]});
+
+// Receive element from loopback color,
+// then cube element, copy to elem buffer, and send to MEMCPY_D2H_1 color
+task process_task(element: f32) void {
+  // Block task to prevent its execution while element is
+  // asynchronously sending to MEMCPY_D2H_1,
+  // unblock when async send is done
+  @block(process_task_id);
+
+  elem[0] = element * element * element;
+  @fmovs(out_dsd, elem_dsd, .{ .async = true, .unblock = process_task });
+}
+
+comptime {
+  @activate(main_task_id);
+  @bind_local_task(main_task, main_task_id);
+  @bind_data_task(process_task, process_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_data_1_iq, .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(d2h_data_1_oq, .{ .color = sys_mod.MEMCPYD2H_1 });
+    @initialize_queue(loopback_iq,   .{ .color = loopback_color });
+    @initialize_queue(loopback_oq,   .{ .color = loopback_color });
+  }
+}

@@ -15,42 +15,30 @@
 // The core kernel must start at P4.1 so the memcpy infrastructure has enough
 // resources to route the data between the host and the device.
 
-// color/ task ID map
+// Color/ task ID map
 //
-//  ID var                ID var         ID var                ID var
-//   0                     9             18                    27 reserved (memcpy)
-//   1 MEMCPY_D2H_DATA_1  10             19                    28 reserved (memcpy)
-//   2                    11             20                    29 reserved
-//   3                    12             21 reserved (memcpy)  30 reserved (memcpy)
-//   4                    13             22 reserved (memcpy)  31 reserved
-//   5                    14             23 reserved (memcpy)  32
-//   6                    15             24                    33
-//   7                    16             25                    34
-//   8 main_task_id       17             26                    35
+//  ID var  ID var         ID var                ID var
+//   0       9             18                    27 reserved (memcpy)
+//   1      10             19                    28 reserved (memcpy)
+//   2      11             20                    29 reserved
+//   3      12             21 reserved (memcpy)  30 reserved (memcpy)
+//   4      13             22 reserved (memcpy)  31 reserved
+//   5      14             23 reserved (memcpy)  32
+//   6      15             24                    33
+//   7      16             25                    34
+//   8      17             26                    35
 
-// IDs for memcpy streaming colors
-param MEMCPYD2H_DATA_1_ID: i16;
-
-// Colors
-const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-
-// Task IDs
-const main_task_id: local_task_id = @get_local_task_id(8);
-
-const memcpy = @import_module( "<memcpy/get_params>", .{
+const memcpy = @import_module("<memcpy/get_params>", .{
   .width = 1,
   .height = 1,
-  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
 });
 
 layout {
   @set_rectangle(1, 1);
 
-  @set_tile_code(0, 0, "pe_program.csl", .{
-    .memcpy_params = memcpy.get_params(0),
-    .main_task_id = main_task_id
-  });
+  @set_tile_code(0, 0, "pe_program.csl", .{ .memcpy_params = memcpy.get_params(0) });
 
   // export symbol name
+  @export_name("result", [*]i16, true);
   @export_name("f_run", fn()void);
 }

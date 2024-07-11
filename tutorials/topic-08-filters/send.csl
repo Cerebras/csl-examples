@@ -1,0 +1,99 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                ID var           ID var                ID var
+//   0                     9               18                    27 reserved (memcpy)
+//   1                    10 exit_task_id  19                    28 reserved (memcpy)
+//   2                    11               20                    29 reserved
+//   3                    12               21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13               22 reserved (memcpy)  31 reserved
+//   5                    14               23 reserved (memcpy)  32
+//   6                    15               24                    33
+//   7                    16               25                    34
+//   8                    17               26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                ID var           ID var                ID var
+//   0 reserved (memcpy)   9               18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10 exit_task_id  19                    28 reserved (memcpy)
+//   2                    11               20                    29 reserved
+//   3                    12               21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13               22 reserved (memcpy)  31 reserved
+//   5                    14               23 reserved (memcpy)  32
+//   6                    15               24                    33
+//   7                    16               25                    34
+//   8                    17               26                    35
+
+param memcpy_params: comptime_struct;
+param pe_id: u16;
+
+// Colors
+param exch_color: color;
+
+// Queues
+const tx_oq: output_queue = @get_output_queue(2);
+
+// Task IDs
+const exit_task_id: local_task_id = @get_local_task_id(10);
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Helper function to pack 16-bit index and 16-bit float value into one 32-bit
+// wavelet.
+fn pack(index: u16, data: f16) u32 {
+  return (@as(u32, index) << 16) | @as(u32, @bitcast(u16, data));
+}
+
+const size = 12;
+const data = [size]u32 {
+  pack(0, 10.0),  pack( 1, 11.0), pack( 2, 12.0),
+  pack(3, 13.0),  pack( 4, 14.0), pack( 5, 15.0),
+  pack(6, 16.0),  pack( 7, 17.0), pack( 8, 18.0),
+  pack(9, 19.0),  pack(10, 20.0), pack(11, 21.0),
+};
+
+// Function sends all data values to all east neighbors.
+fn main_fn() void {
+  const in_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{size} -> data[i]
+  });
+
+  const out_dsd = @get_dsd(fabout_dsd, .{
+    .extent = size,
+    .fabric_color = exch_color,
+    .output_queue = tx_oq,
+  });
+
+  @mov32(out_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
+}
+
+task exit_task() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+  @bind_local_task(exit_task, exit_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(tx_oq, .{ .color = exch_color });
+  }
+
+  @export_symbol(main_fn);
+}

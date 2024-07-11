@@ -32,10 +32,10 @@ param Kt: i16;
 param Nt: i16;
 
 // Task IDs
-param EXIT:            local_task_id; // entrypoint to leave RPC
-param compute_task_id: local_task_id;
-param x_task_id:       local_task_id;
-param y_task_id:       local_task_id;
+const EXIT:            local_task_id = @get_local_task_id(12);
+const compute_task_id: local_task_id = @get_local_task_id(13);
+const x_task_id:       local_task_id = @get_local_task_id(14);
+const y_task_id:       local_task_id = @get_local_task_id(15);
 
 const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
@@ -52,7 +52,8 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 
-// memcpy uses input/output queue 0
+// On WSE-2, memcpy uses input/output queue 0
+// On WSE-3, memcpy uses input/output queues 0 and 1
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 const P = @get_rectangle().width;

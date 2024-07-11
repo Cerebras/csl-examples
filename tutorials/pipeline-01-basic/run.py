@@ -35,14 +35,12 @@ with open(f"{dirname}/out.json", encoding="utf-8") as json_file:
 params = compile_data["params"]
 MEMCPYH2D_DATA_1 = int(params["MEMCPYH2D_DATA_1_ID"])
 MEMCPYD2H_DATA_1 = int(params["MEMCPYD2H_DATA_1_ID"])
-# Size of the input and output tensors; use this value when compiling the
-# program, e.g. `cslc --params=size:12 --fabric-dims=8,3 --fabric-offsets=4,1`
 size = int(params["size"])
 print(f"MEMCPYH2D_DATA_1 = {MEMCPYH2D_DATA_1}")
 print(f"MEMCPYD2H_DATA_1 = {MEMCPYD2H_DATA_1}")
 print(f"size = {size}")
 
-memcpy_dtype = MemcpyDataType.MEMCPY_16BIT
+memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
 runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
 runner.load()
@@ -52,28 +50,18 @@ runner.run()
 input_tensor = np.random.randint(256, size=size, dtype=np.int16)
 
 print("step 1: streaming H2D")
-# "input_tensor" is a 1d array
-# The type of input_tensor is int16, we need to extend it to uint32
-# There are two kinds of extension when using the utility function input_array_to_u32
-#    input_array_to_u32(np_arr: np.ndarray, sentinel: Optional[int], fast_dim_sz: int)
-# 1) zero extension:
-#    sentinel = None
-# 2) upper 16-bit is the index of the array:
-#    sentinel is Not None
-#
-# In this example, the upper 16-bit is don't care because pe_program.csl only uses
-# @add16 to reads lower 16-bit
-tensors_u32 = input_array_to_u32(input_tensor, 1, size)
-runner.memcpy_h2d(MEMCPYH2D_DATA_1, tensors_u32, 0, 0, 1, 1, size, \
+# The type of input_tensor is int16, so we need to extend to 32-bit for memcpy H2D
+input_tensor_u32 = input_array_to_u32(input_tensor, 1, size)
+runner.memcpy_h2d(MEMCPYH2D_DATA_1, input_tensor_u32, 0, 0, 1, 1, size, \
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
 print("step 2: streaming D2H")
-# The D2H buffer must be of type u32
-out_tensors_u32 = np.zeros(size, np.uint32)
-runner.memcpy_d2h(out_tensors_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, size, \
+# The memcpy D2H buffer must be 32-bit
+output_tensor_u32 = np.zeros(size, np.uint32)
+runner.memcpy_d2h(output_tensor_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, size, \
     streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 # remove upper 16-bit of each u32
-result_tensor = memcpy_view(out_tensors_u32, np.dtype(np.int16))
+result_tensor = memcpy_view(output_tensor_u32, np.dtype(np.int16))
 
 runner.stop()
 

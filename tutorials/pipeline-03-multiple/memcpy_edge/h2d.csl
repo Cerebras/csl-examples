@@ -1,0 +1,108 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Two streaming H2Ds:
+// 1st H2D: UT 2 and UT 5
+// 2nd H2D: UT 3 and UT 6
+
+param MEMCPYH2D_1 = {};
+param MEMCPYH2D_2 = {};
+
+// Color along which we send a wavelet to pe_program
+param USER_IN_1 = {};
+param USER_IN_2 = {};
+
+param txdir: direction;
+
+// Queue IDs
+const h2d_1_iq: input_queue = @get_input_queue(5);
+const h2d_2_iq: input_queue = @get_input_queue(6);
+const USER_IN_1_oq: output_queue = @get_output_queue(2);
+const USER_IN_2_oq: output_queue = @get_output_queue(3);
+
+const max_fifo_len = 256*20; // maximum length of the fifo
+
+var fifo1_buffer = @zeros([max_fifo_len]u32);
+const fifo1 = @allocate_fifo(fifo1_buffer);
+
+var fifo2_buffer = @zeros([max_fifo_len]u32);
+const fifo2 = @allocate_fifo(fifo2_buffer);
+
+const INFINITE_DSD_LEN: u16 = 0x7fff;
+
+var fab_recv_wdsd_1 = @get_dsd(fabin_dsd, .{
+  .extent = INFINITE_DSD_LEN,
+  .fabric_color = MEMCPYH2D_1,
+  .input_queue = h2d_1_iq,
+});
+
+var fab_trans_wdsd_1 = @get_dsd(fabout_dsd, .{
+  .extent = INFINITE_DSD_LEN,
+  .fabric_color = USER_IN_1,
+  .output_queue = USER_IN_1_oq,
+});
+
+var fab_recv_wdsd_2 = @get_dsd(fabin_dsd, .{
+   .extent = INFINITE_DSD_LEN,
+   .fabric_color = MEMCPYH2D_2,
+   .input_queue = h2d_2_iq,
+});
+
+var fab_trans_wdsd_2 = @get_dsd(fabout_dsd, .{
+    .extent = INFINITE_DSD_LEN,
+    .fabric_color = USER_IN_2,
+    .output_queue = USER_IN_2_oq,
+});
+
+// if no user's color is defined, f_startup() is empty
+fn f_startup() void {
+  if (!@is_same_type(@type_of(MEMCPYH2D_1), void) and !@is_same_type(@type_of(USER_IN_1), void)) {
+    // receive data from streaming H2D
+    @mov32(fifo1, fab_recv_wdsd_1, .{ .async = true });
+
+    // forward data to USER_IN_1
+    @mov32(fab_trans_wdsd_1, fifo1, .{ .async = true });
+  }
+
+  if (!@is_same_type(@type_of(MEMCPYH2D_2), void) and !@is_same_type(@type_of(USER_IN_2), void)) {
+    // receive data from streaming H2D
+    @mov32(fifo2, fab_recv_wdsd_2, .{ .async = true });
+
+    // forward data to USER_IN_1
+    @mov32(fab_trans_wdsd_2, fifo2, .{ .async = true });
+  }
+}
+
+comptime {
+  if (!@is_same_type(@type_of(USER_IN_1), void)) {
+    @set_local_color_config(USER_IN_1, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ txdir }}});
+  }
+
+  if (!@is_same_type(@type_of(USER_IN_2), void)) {
+    @set_local_color_config(USER_IN_2, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ txdir }}});
+  }
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    if (!@is_same_type(@type_of(USER_IN_1), void)) {
+      @initialize_queue(h2d_1_iq, .{ .color = MEMCPYH2D_1 });
+      @initialize_queue(USER_IN_1_oq, .{ .color = USER_IN_1 });
+    }
+
+    if (!@is_same_type(@type_of(USER_IN_2), void)) {
+      @initialize_queue(h2d_2_iq, .{ .color = MEMCPYH2D_2 });
+      @initialize_queue(USER_IN_2_oq, .{ .color = USER_IN_2 });
+    }
+  }
+}

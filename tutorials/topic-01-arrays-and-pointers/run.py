@@ -16,7 +16,6 @@
 
 
 import argparse
-import json
 import numpy as np
 
 from cerebras.sdk.sdk_utils import memcpy_view
@@ -29,27 +28,21 @@ parser.add_argument("--cmaddr", help="IP:port for CS system")
 args = parser.parse_args()
 dirname = args.name
 
-# Parse the compile metadata
-with open(f"{dirname}/out.json", encoding="utf-8") as json_file:
-  compile_data = json.load(json_file)
-params = compile_data["params"]
-MEMCPYD2H_DATA_1 = int(params["MEMCPYD2H_DATA_1_ID"])
-print(f"MEMCPYD2H_DATA_1 = {MEMCPYD2H_DATA_1}")
-
 memcpy_dtype = MemcpyDataType.MEMCPY_16BIT
 runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
+
+result_symbol = runner.get_id('result')
 
 runner.load()
 runner.run()
 
-print("step 1: call f_run to send global of type i16 via streaming D2H")
 runner.launch("f_run", nonblock=False)
 
-print("step 2: streaming D2H")
 # The D2H buffer must be of type u32
 out_tensors_u32 = np.zeros(1, np.uint32)
-runner.memcpy_d2h(out_tensors_u32, MEMCPYD2H_DATA_1, 0, 0, 1, 1, 1, \
-    streaming=True, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+runner.memcpy_d2h(out_tensors_u32, result_symbol, 0, 0, 1, 1, 1, \
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+
 # remove upper 16-bit of each u32
 result_tensor = memcpy_view(out_tensors_u32, np.dtype(np.int16))
 

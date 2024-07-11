@@ -4,6 +4,25 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 1.2.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 1.2.0.
+
+- All tutorial example programs have been updated to support WSE-3.
+
+- Two new example programs for switches, demonstrating use of the
+  ``<control>`` library, have been added.
+
+- A new example program demonstrating the ``<simprint>`` library has been
+  added.
+
+- ``wide-multiplication``, ``residual``, ``mandelbrot``,
+  ``gemv-collectives_2d``, ``gemv-checkerboard-pattern``,
+  ``gemm-collectives_2d``, ``stencil-3d-7pts``, ``bicgstab``,
+  ``conjugateGradient``, ``preconditionedConjugateGradient``, and
+  ``powerMethod`` programs have been updated to support WSE-3.
+
 Version 1.1.0
 -------------
 

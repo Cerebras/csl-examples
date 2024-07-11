@@ -1,0 +1,123 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                ID var  ID var                ID var
+//   0 recv_task_id        9      18                    27 reserved (memcpy)
+//   1                    10      19                    28 reserved (memcpy)
+//   2                    11      20                    29 reserved
+//   3                    12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                ID var  ID var                ID var
+//   0 reserved (memcpy)   9      18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10      19                    28 reserved (memcpy)
+//   2 recv_task_id       11      20                    29 reserved
+//   3                    12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Number of elements expected from sender
+param num_elems: u16;
+
+// Colors
+param comm: color;
+
+// Queue IDs
+const comm_iq: input_queue = @get_input_queue(2);
+const comm_oq: output_queue = @get_output_queue(2);
+
+// Task ID for recv_task, consumed wlts with color comm
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+// Task ID for data task that recvs from memcpy
+const recv_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(comm)
+  else if (@is_arch("wse3")) @get_data_task_id(comm_iq);
+
+// Import two instances of <debug>:
+// `trace` records comptime string and value of 'global'
+// `times` records timestamps at begin and end of tasks
+const trace = @import_module(
+  "<debug>",
+  .{ .key = "trace",
+     .buffer_size = 100,
+   }
+);
+const times = @import_module(
+  "<debug>",
+  .{ .key = "times",
+     .buffer_size = 100,
+   }
+);
+
+// Variable whose value we update in recv_task
+var global : u32 = 0;
+
+// Array to store received values
+var buf = @zeros([num_elems]u32);
+var ptr_buf: [*]u32 = &buf;
+
+// main_fn does nothing on the senders
+fn main_fn() void {}
+
+// Track number of wavelets received by recv_task
+var num_wlts_recvd: u16 = 0;
+
+task recv_task(in_data : u32) void {
+
+  times.trace_timestamp(); // Record timestamp for task start in `times`
+  trace.trace_string("Start recv_task"); // Record string in `trace`
+
+  buf[num_wlts_recvd] = in_data; // Store recvd value in buf
+  global += 2*in_data; // Increment global by 2x received value
+
+  trace.trace_u32(global); // Record updated value of global in `trace`
+
+  num_wlts_recvd += 1; // Increment number of received wavelets
+  // Once we have received all wavelets, we unblock cmd stream
+  if (num_wlts_recvd == num_elems) {
+    sys_mod.unblock_cmd_stream();
+  }
+
+  times.trace_timestamp(); // Record timestamp for task end in `times`
+}
+
+comptime {
+  @bind_data_task(recv_task, recv_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(comm_iq, .{ .color = comm });
+    @initialize_queue(comm_oq, .{ .color = comm });
+  }
+
+  @export_symbol(ptr_buf, "buf");
+  @export_symbol(main_fn);
+}

@@ -1,5 +1,3 @@
-.. _benchmark-gemm-collectives-memcpy:
-
 GEMM with Collective Operations
 ===============================
 

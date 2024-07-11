@@ -218,6 +218,8 @@ const dest_dsr = @get_dsr(dsr_dest, dest_dsr_ids[0]);
 const src0_dsr = @get_dsr(dsr_src0, src0_dsr_ids[0]);
 const src1_dsr = @get_dsr(dsr_src1, src1_dsr_ids[0]);
 
+const iq_route = @get_input_queue(queues[0]);
+const oq_route = @get_output_queue(queues[0]);
 
 // The portal function of allreduce(ADD/MAX)
 //
@@ -311,71 +313,6 @@ fn allreduce_nrm2(in_tensor: [*]f32) void {
     @activate(C_STATE_ENTRY);
 }
 
-//--------------------- system utility for teardown
-
-// ref: old monolith/src/ucode/kernels/lib/pe_address_map.casm
-// const TAMAP_FAB_MAP_START_ADDR       = 0x7f20
-// ref: monolith/src/ucode/kernels/lib/pe_addr_map_ein.casm
-// const TAMAP_FAB_TRAFFIC_MAP_START_ADDR = 0x7f20
-const TAMAP_FAB_MAP_START_ADDR : u16 = 0x7f20;
-const D2H_COLOR_CONFIG_ADDR : u16 = TAMAP_FAB_MAP_START_ADDR + @get_int(C_ROUTE);
-
-// mask out bit 0:9, including input/output pos0
-// keep bit 10:15, including
-//  bit 15: point to point
-//  bit 14: TIP
-//  bit 12-13: control wavelet pop mode
-//  bit 11: color swap for E,W inputs
-//  bit 10: color swap for N,S inputs
-//
-// The teardown clears bit 14 (TIP)
-// bit 12-13 is comptime decided, only last PE uses pop_always, others pop_on_advance
-const MASK_INPUT_OUTPUT_POS0: u16 = 0xfc00;
-
-// bits 0:4 define the initial output switch position
-const OUTPUT_WEST: u16  = 0x1;  // bit 0: west output mask
-const OUTPUT_EAST: u16  = 0x2;  // bit 1: east output mask
-const OUTPUT_SOUTH: u16 = 0x4;  // bit 2: south output mask
-const OUTPUT_NORTH: u16 = 0x8;  // bit 3: north output mask
-const OUTPUT_RAMP: u16  = 0x10; // bit 4: offramp output mask
-
-// bits 5:9 define the initial input switch position
-const INPUT_WEST: u16  = 0x20;  // bit 5: west input mask
-const INPUT_EAST: u16  = 0x40;  // bit 6: east input mask
-const INPUT_SOUTH: u16 = 0x80;  // bit 7: south input mask
-const INPUT_NORTH: u16 = 0x100; // bit 8: north input mask
-const INPUT_RAMP: u16  = 0x200; // bit 9: onramp input mask
-
-// Fabric switch configuration
-// 0x7f40 - 0x7f57 - colors 0-23. Each address is for a single color
-// Bits 14:13 Current Switch position (writes both input and output switch position; reads input position)
-// Bits 12 Ring mode (1) (Switch movements Stop on last valid setting if ring mode is 0.)
-// Bit 11 Switch position 3 switch select (1=input; 0 = output)
-// Bits 10:8 Switch position 3 (5 = INVALID; 4 = CE; 3 = N; 2 = S; 1 = E; 0 = W)
-// Bit 7 Switch position 2 switch select (1=input; 0 = output)
-// Bits 6:4 Switch position 2 (5 = INVALID; 4 = CE; 3 = N; 2 = S; 1 = E; 0 = W)
-// Bit 3 Switch position 1 switch select (1=input; 0 = output)
-// Bits 2:0 Switch position 1 (5 = INVALID; 4 = CE; 3 = N; 2 = S; 1 = E; 0 = W)
-//
-// ref: monolith/src/ucode/kernels/lib/pe_addr_map_fyn.casm
-// .const TAMAP_FAB_SWITCH_CFG_START_ADDR = 0x7f40
-const TAMAP_FAB_SWITCH_CFG_START_ADDR: u16 = 0x7f40;
-const D2H_SWITCH_CONFIG_ADDR: u16 = TAMAP_FAB_SWITCH_CFG_START_ADDR + @get_int(C_ROUTE);
-// mask bits 14:13
-// masking with MASK_SWITCH_RESET_POS0 is equivalent to set bits14:13 to zero (i.e. back to pos0)
-const MASK_SWITCH_RESET_POS0: u16 = 0x9fff;
-
-// To clear setting of pos1, set bits 2:0 to zero, but keep others unchanged
-const MASK_SWITCH_CLEAR_POS1: u16 = 0xfff8;
-// Bit 3 is always 1 because "pos1 = {.rx = RAMP}" implies position 1 switch select is "1=input"
-const SWITCH_POS1_INVALID: u16 = 0x5;
-const SWITCH_POS1_RAMP: u16 = 0x4;
-
-fn translate_word_to_bytes( addr: u16 ) u16 {
-    var addr_bytes = addr * 2 ;
-    return addr_bytes;
-}
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // DSDs
@@ -411,7 +348,7 @@ var mem_x_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy[i] }
 var fab_trans_x_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = C_ROUTE,
-    .output_queue = @get_output_queue(queues[0])
+    .output_queue = oq_route
 });
 
 // WARNING: control wavelet must be sent with the same microthread, via the same output buffer,
@@ -422,7 +359,7 @@ const fab_trans_ctrl_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .control = true,
     .fabric_color = C_ROUTE,
-    .output_queue = @get_output_queue(queues[0]),
+    .output_queue = oq_route
 });
 
 
@@ -435,7 +372,7 @@ const fab_trans_ctrl_wdsd = @get_dsd(fabout_dsd, .{
 var fab_recv_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = 1,
    .fabric_color = C_ROUTE,
-   .input_queue = @get_input_queue(queues[0])
+   .input_queue = iq_route
 });
 
 
@@ -857,10 +794,29 @@ comptime {
 //----------------- the following is the routing of C_ROUTE
 
 const tile_config = @import_module("<tile_config>");
+const color_config = tile_config.color_config;
+const switch_config = tile_config.switch_config;
 
 fn rowReduce_configure() void {
 
-    // (1) setup switch according to config parameters
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (first_px){
+        // 1st PE must has {rx = RAMP} to send out the data
+        // .rx = .{ RAMP },.tx = .{ EAST },
+        color_config.reset_routes(addr, .{.tx = EAST, .rx = RAMP});
+    }else if (last_px){
+        // last PE only receives data
+        // .rx = .{ WEST }, .tx = .{ RAMP },
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = WEST});
+    }else{
+        // 0 < px < width-1
+        // .rx = .{ WEST }, .tx = .{ EAST },
+        color_config.reset_routes(addr, .{.tx = EAST, .rx = WEST});
+    }
+
+    // (2) setup switch according to config parameters
     // 1. pos0 (color config reg)
     // 2. pos1 (switch config reg)
     //    pos1 = {.rx = RAMP} for all PEs except last PE
@@ -870,45 +826,23 @@ fn rowReduce_configure() void {
     // it is possible that some PE is at pos1 after the switch is reconfigured and the sending
     // pattern is messed up, for example, the PE sends data first, then forwards the data from
     // the west.
-    var r_switch_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* ;
-    // mask bits 14:13 to reset input&output position to pos0
-    r_switch_state = r_switch_state & MASK_SWITCH_RESET_POS0;
+    switch_config.clear_current_position(C_ROUTE);
+
+    // invalidate pos1, pos2, pos3 but keep ring mode and pop mode
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
     // WARNING: all PEs are configured by
     //   - ".pos1 = .{ .rx = RAMP }"  --> bit 3 is 1
     //   - ".ring_mode = true"  --> bit 12 is 1
     //   - ".pop_mode = .{ .pop_on_advance = true }" --> bits 13:12 of fabric per-color config
-    // mask bits 2:0 to clear setting of pos1
-    r_switch_state = r_switch_state & MASK_SWITCH_CLEAR_POS1;
     if (last_px){
         // last PE does not have pos1
-        r_switch_state = r_switch_state | SWITCH_POS1_INVALID;
     }else{
         // others have ".pos1 = .{ .rx = RAMP }"
-        r_switch_state = r_switch_state | SWITCH_POS1_RAMP;
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
-    @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* = r_switch_state;
 
-    var r_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* ;
-    // clear input/output switch pos0
-    r_state = r_state & MASK_INPUT_OUTPUT_POS0 ;
-
-    if (first_px){
-        // 1st PE must has {rx = RAMP} to send out the data
-        // .rx = .{ RAMP },.tx = .{ EAST },
-        r_state = r_state | INPUT_RAMP | OUTPUT_EAST;
-    }else if (last_px){
-        // last PE only receives data
-        // .rx = .{ WEST }, .tx = .{ RAMP },
-        r_state = r_state | INPUT_WEST | OUTPUT_RAMP;
-    }else{ 
-        // 0 < px < width-1
-        // .rx = .{ WEST }, .tx = .{ EAST },
-        r_state = r_state | INPUT_WEST | OUTPUT_EAST;
-    }
-    // update the switch pos0
-    @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* = r_state;
-
-    // (2) clear teardown-in-progress bit
+    // (3) clear teardown-in-progress bit
     // config_reg[c] ^= mask where mask = 1 << 14
     tile_config.teardown.exit(C_ROUTE);
 }
@@ -916,7 +850,24 @@ fn rowReduce_configure() void {
 
 fn colReduce_configure() void {
 
-    // (1) setup switch according to config parameters
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (first_py){
+        // 1st PE must has {rx = RAMP} to send out the data
+        // .rx = .{ RAMP },.tx = .{ SOUTH },
+        color_config.reset_routes(addr, .{.tx = SOUTH, .rx = RAMP});
+    }else if (last_py){
+        // last PE only receives data
+        // .rx = .{ NORTH }, .tx = .{ RAMP },
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = NORTH});
+    }else{
+        // 0 < py < width-1
+        // .rx = .{ NORTH }, .tx = .{ SOUTH },
+        color_config.reset_routes(addr, .{.tx = SOUTH, .rx = NORTH});
+    }
+
+    // (2) setup switch according to config parameters
     // 1. pos0 (color config reg)
     // 2. pos1 (switch config reg)
     //    pos1 = {.rx = RAMP} for all PEs except last PE
@@ -926,45 +877,23 @@ fn colReduce_configure() void {
     // it is possible that some PE is at pos1 after the switch is reconfigured and the sending
     // pattern is messed up, for example, the PE sends data first, then forwards the data from
     // the west.
-    var r_switch_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* ;
-    // mask bits 14:13 to reset input&output position to pos0
-    r_switch_state = r_switch_state & MASK_SWITCH_RESET_POS0;
+    switch_config.clear_current_position(C_ROUTE);
+
+    // invalidate pos1, pos2, pos3 but keep ring mode and pop mode
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
     // WARNING: all PEs are configured by
     //   - ".pos1 = .{ .rx = RAMP }"  --> bit 3 is 1
     //   - ".ring_mode = true"  --> bit 12 is 1
     //   - ".pop_mode = .{ .pop_on_advance = true }" --> bits 13:12 of fabric per-color config
-    // mask bits 2:0 to clear setting of pos1
-    r_switch_state = r_switch_state & MASK_SWITCH_CLEAR_POS1;
     if (last_py){
         // last PE does not have pos1
-        r_switch_state = r_switch_state | SWITCH_POS1_INVALID;
     }else{
         // others have ".pos1 = .{ .rx = RAMP }"
-        r_switch_state = r_switch_state | SWITCH_POS1_RAMP;
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
-    @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* = r_switch_state;
 
-    var r_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* ;
-    // clear input/output switch pos0
-    r_state = r_state & MASK_INPUT_OUTPUT_POS0 ;
-
-    if (first_py){
-        // 1st PE must has {rx = RAMP} to send out the data
-        // .rx = .{ RAMP },.tx = .{ SOUTH },
-        r_state = r_state | INPUT_RAMP | OUTPUT_SOUTH;
-    }else if (last_py){
-        // last PE only receives data
-        // .rx = .{ NORTH }, .tx = .{ RAMP },
-        r_state = r_state | INPUT_NORTH | OUTPUT_RAMP;
-    }else{
-        // 0 < py < width-1
-        // .rx = .{ NORTH }, .tx = .{ SOUTH },
-        r_state = r_state | INPUT_NORTH | OUTPUT_SOUTH;
-    }
-    // update the switch pos0
-    @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* = r_state;
-
-    // (2) clear teardown-in-progress bit
+    // (3) clear teardown-in-progress bit
     // config_reg[c] ^= mask where mask = 1 << 14
     tile_config.teardown.exit(C_ROUTE);
 }
@@ -981,7 +910,34 @@ fn colReduce_configure() void {
 //
 fn bcast_configure() void {
 
-    // (1) setup switch according to config parameters
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (last_px){
+        // px = w-1
+        if (last_py){
+            // Pw-1,h-1: send to west and north, { .rx = .{RAMP}, .tx = .{WEST, NORTH} } }
+            color_config.reset_routes(addr, .{.tx = [2]direction{WEST, NORTH}, .rx = RAMP});
+        }else{
+            if (first_py){
+                // Pw-1,0: { .rx = .{SOUTH}, .tx = .{WEST, RAMP} }
+                color_config.reset_routes(addr, .{.tx = [2]direction{WEST, RAMP}, .rx = SOUTH});
+            }else{
+                // Pw-1,py: 0 < py < h-1, { .rx = .{SOUTH}, .tx = .{WEST, RAMP, NORTH} }
+                color_config.reset_routes(addr, .{.tx = [3]direction{WEST, RAMP, NORTH}, .rx = SOUTH});
+            }
+        }
+    }else{
+        if (first_px){
+            // px = 0, {.rx = .{EAST}, .tx = .{RAMP}}
+            color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
+        }else{
+            // 0 < px < w-1, { .rx = .{EAST}, .tx = .{WEST, RAMP} }
+            color_config.reset_routes(addr, .{.tx = [2]direction{WEST, RAMP}, .rx = EAST});
+        }
+    }
+
+    // (2) setup switch according to config parameters
     // 1. pos0 (color config reg)
     // 2. pos1 (switch config reg)
     //    pos1 = {invalid} for all PEs
@@ -991,50 +947,16 @@ fn bcast_configure() void {
     // it is possible that some PE is at pos1 after the switch is reconfigured and the sending
     // pattern is messed up, for example, the PE sends data first, then forwards the data from
     // the west.
-    var r_switch_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* ;
-    // mask bits 14:13 to reset input&output position to pos0
-    r_switch_state = r_switch_state & MASK_SWITCH_RESET_POS0;
+    switch_config.clear_current_position(C_ROUTE);
+
     // WARNING: all PEs have pos0 only, so disable pos1
     //   no change for ring_mode and pop_mode
     //   - ".ring_mode = true"  --> bit 12 is 1
     //   - ".pop_mode = .{ .pop_on_advance = true }" --> bits 13:12 of fabric per-color config
-    // mask bits 2:0 to clear setting of pos1
-    r_switch_state = r_switch_state & MASK_SWITCH_CLEAR_POS1;
-    r_switch_state = r_switch_state | SWITCH_POS1_INVALID;
-    @bitcast(*u16, translate_word_to_bytes(D2H_SWITCH_CONFIG_ADDR) ).* = r_switch_state;
+    // invalidate pos1, pos2, pos3 but keep ring mode and pop mode
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    var r_state : u16 = @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* ;
-    // clear input/output switch pos0
-    r_state = r_state & MASK_INPUT_OUTPUT_POS0 ;
-
-    if (last_px){
-        // px = w-1
-        if (last_py){
-            // Pw-1,h-1: send to west and north, { .rx = .{RAMP}, .tx = .{WEST, NOTH} } }
-            r_state = r_state | INPUT_RAMP | OUTPUT_WEST | OUTPUT_NORTH;
-        }else{
-            if (first_py){
-                // Pw-1,0: { .rx = .{SOUTH}, .tx = .{WEST, RAMP} }
-                r_state = r_state | INPUT_SOUTH | OUTPUT_WEST | OUTPUT_RAMP;
-            }else{
-                // Pw-1,py: 0 < py < h-1, { .rx = .{SOUTH}, .tx = .{WEST, RAMP, NORTH} }
-                r_state = r_state | INPUT_SOUTH | OUTPUT_WEST | OUTPUT_RAMP | OUTPUT_NORTH;
-            }
-        }
-    }else{
-        if (first_px){
-            // px = 0, {.rx = .{EAST}, .tx = .{RAMP}}
-            r_state = r_state | INPUT_EAST | OUTPUT_RAMP;
-        }else{
-            // 0 < px < w-1, { .rx = .{EAST}, .tx = .{WEST, RAMP} }
-            r_state = r_state | INPUT_EAST | OUTPUT_RAMP | OUTPUT_WEST;
-        }
-    }
-
-    // update the switch pos0
-    @bitcast(*u16, translate_word_to_bytes(D2H_COLOR_CONFIG_ADDR) ).* = r_state;
-
-    // (2) clear teardown-in-progress bit
+    // (3) clear teardown-in-progress bit
     // config_reg[c] ^= mask where mask = 1 << 14
     tile_config.teardown.exit(C_ROUTE);
 }
@@ -1173,5 +1095,12 @@ comptime {
 // the compiler no longer can generate the instruction to set up the
 // config register of input queue.
 comptime {
-    @initialize_queue(@get_input_queue(queues[0]), .{.color = C_ROUTE} );
+    @initialize_queue(iq_route, .{.color = C_ROUTE} );
+}
+
+comptime {
+    // necessary, otherwise the data is not sent into the output queue
+    if (@is_arch("wse3")){
+        @initialize_queue(oq_route, .{.color = C_ROUTE });
+    }
 }

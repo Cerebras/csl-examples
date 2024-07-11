@@ -39,8 +39,23 @@ M = int(compile_data['params']['M']) # rows
 kernel_x_dim = int(compile_data['params']['kernel_x_dim'])
 kernel_y_dim = int(compile_data['params']['kernel_y_dim'])
 
+np.random.seed(seed=7)
+
 # Construct A, x, b
-A = np.arange(M*N, dtype=np.float32).reshape(M,N)
+#
+# In the previous examples, we used arange to initialize
+# the elements of A. This example can support any number
+# of PEs, and thus the matrix A could be quite large, so
+# arange is no longer suitable. Instead, we use rand() to
+# initialize the elements to random numbers between 0 and
+# 1, to avoid numerical issues in our calculation."
+#
+# The upper bound of error estimate is proportional to
+# (|A|*|x|+|b|). If the magnitude of A is large, any small
+# mistake could be invisible. For example, if one entry is
+# not calculated correctly, it may still pass because the
+# error bound is too big. So rand() is better than arange().
+A = np.random.rand(M, N).astype(np.float32)
 x = np.full(shape=N, fill_value=1.0, dtype=np.float32)
 b = np.full(shape=M, fill_value=2.0, dtype=np.float32)
 
@@ -91,5 +106,37 @@ runner.memcpy_d2h(y_result, y_symbol, kernel_x_dim-1, 0, 1, kernel_y_dim, M_per_
 runner.stop()
 
 # Ensure that the result matches our expectation
-np.testing.assert_allclose(y_result, y_expected)
+# The formula of assert_allclose() is
+#   |a-b| <= atol + rtol * |b|
+# where rtol = 1.e-5, atol=1.e-8
+#
+# However the magnitude of y_result or y_expected is (|A|*|x| + |b|), so
+# it is likely to fail the absolute tolerance (atol) when |A| is large.
+#
+# Using the norm-wise error is perferred for large dimension.
+#   |y_result - y_expected|/(|A|*|x| + |b|) < tol
+#
+r = y_result - y_expected
+nrm_r = np.linalg.norm(r, np.inf)
+nrm_x = np.linalg.norm(x, np.inf)
+nrm_b = np.linalg.norm(b, np.inf)
+nrm_A = np.linalg.norm(A, np.inf)
+print(f"|y_result - y_expected| = {nrm_r}")
+print(f"|x| = {nrm_x}")
+print(f"|b| = {nrm_b}")
+print(f"|A| = {nrm_A}")
+
+relerr = nrm_r/(nrm_A*nrm_x + nrm_b)
+print(f"|y_result - y_expected|/(|A|*|x| + |b|) = {relerr}")
+
+assert relerr < 1.e-6, "norm-wise relative error is too big, something must be wrong"
+
+# The norm-wise estimate sometimes over-estimates too much, we can also
+# check the absolute error when the matrix is small.
+#
+# too large. If it fails (but norm-wise estimate can pass), try
+#   np.testing.assert_allclose(y_result/nrm_A, y_expected/nrm_A)
+if N < 10:
+  np.testing.assert_allclose(y_result, y_expected)
+
 print("SUCCESS!")

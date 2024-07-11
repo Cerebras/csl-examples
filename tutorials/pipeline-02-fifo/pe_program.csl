@@ -12,73 +12,83 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Not a complete program; the top-level source file is code.csl.
-
-//
 // Introduce a fifo to buffer the data from H2D, so the H2D can
 // finish as long as size does not exceed the capacity of the fifo
 //
 // H2D --> fifo --> C1 --> addh() --> D2H
-//
-
-param size: i16;
-param main: u16;
-param C1: color;
 
 param memcpy_params: comptime_struct;
 
-const main_task_id: local_task_id = @get_local_task_id(main);
+param size: i16;
+param main: u16;
 
-const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+// Colors
+param C1: color;
+
+// Queue IDs
+const h2d_1_iq: input_queue = @get_input_queue(2);
+const d2h_1_oq: output_queue = @get_output_queue(3);
+const C1_iq: input_queue = @get_input_queue(4);
+const C1_oq: output_queue = @get_output_queue(5);
+
+// Task IDs
+const main_task_id: local_task_id = @get_local_task_id(8);
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 var fifo_buffer = @zeros([1024]i16);
 const fifo = @allocate_fifo(fifo_buffer);
 
-const infinite_length: u16 = 0x7fff;
+const INFINITE_DSD_LEN: u16 = 0x7fff;
 
-const in_dsd = @get_dsd(fabin_dsd, .{
-  .extent = infinite_length,
+const h2d_in_dsd = @get_dsd(fabin_dsd, .{
+  .extent = INFINITE_DSD_LEN,
   .fabric_color = sys_mod.MEMCPYH2D_1,
-  .input_queue = @get_input_queue(2)});
-
-const out_dsd = @get_dsd(fabout_dsd, .{
-  .extent = infinite_length,
-  .fabric_color = C1,
-  .output_queue = @get_output_queue(3)});
-
-const inDsd = @get_dsd(fabin_dsd, .{
-  .extent = size,
-  .fabric_color = C1,
-  .input_queue = @get_input_queue(1),
+  .input_queue = h2d_1_iq
 });
 
-const outDsd = @get_dsd(fabout_dsd, .{
+const C1_out_dsd = @get_dsd(fabout_dsd, .{
+  .extent = INFINITE_DSD_LEN,
+  .fabric_color = C1,
+  .output_queue = C1_oq
+});
+
+const C1_in_dsd = @get_dsd(fabin_dsd, .{
+  .extent = size,
+  .fabric_color = C1,
+  .input_queue = C1_iq
+});
+
+const d2h_out_dsd = @get_dsd(fabout_dsd, .{
   .extent = size,
   .fabric_color = sys_mod.MEMCPYD2H_1,
-  .output_queue = @get_output_queue(1)
+  .output_queue = d2h_1_oq
 });
 
-var buf = @zeros([1]i16);
+const buf = [1]i16{ 1 };
 const one_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{size} -> buf[0] });
 
-task mainTask() void {
+task main_task() void {
 
   // Move from the fabric to the FIFO
-  @mov16(fifo, in_dsd, .{.async = true});
+  @mov16(fifo, h2d_in_dsd, .{ .async = true });
 
   // Move from the FIFO to C1
-  @mov16(out_dsd, fifo, .{.async = true});
+  @mov16(C1_out_dsd, fifo, .{ .async = true });
 
-  buf[0] = @as(i16, 1);
-  @add16(outDsd, inDsd, one_dsd, .{.async=true});
+  @add16(d2h_out_dsd, C1_in_dsd, one_dsd, .{ .async = true });
 }
 
 comptime {
-  // activate local task mainTask at startup
-  @bind_local_task(mainTask, main_task_id);
+  // activate local task main_task_id at startup
+  @bind_local_task(main_task, main_task_id);
   @activate(main_task_id);
 
-  // fifo sends out the data via C1 --> tx = RAMP
-  // add16 receives data via C1 --> rx = RAMP
-  @set_local_color_config(C1, .{.routes = .{.rx = .{RAMP}, .tx = .{RAMP}}});
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_1_iq,  .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(d2h_1_oq,  .{ .color = sys_mod.MEMCPYD2H_1 });
+    @initialize_queue(C1_iq, .{ .color = C1 });
+    @initialize_queue(C1_oq, .{ .color = C1 });
+  }
 }

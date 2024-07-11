@@ -1,0 +1,54 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+param recv_color: color;
+
+const M: i16 = 10;
+
+// Task IDs
+const exit_task_id: local_task_id = @get_local_task_id(9);
+
+// Queue and microthread IDs
+const recv_color_iq = @get_input_queue(2);
+const recv_color_ut = @get_ut_id(5);
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+var y: [M]f32;
+var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> y[i] });
+var y_ptr: [*]f32 = &y;
+
+fn compute() void {
+  const in_dsd = @get_dsd(fabin_dsd, .{
+                   .fabric_color = recv_color, .extent = M,
+                   .input_queue = recv_color_iq
+                 });
+  @fmovs(y_dsd, in_dsd, .{ .async = true, .ut_id = recv_color_ut,
+                           .activate = exit_task_id });
+}
+
+task exit_task() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+  @bind_local_task(exit_task, exit_task_id);
+
+  @initialize_queue(recv_color_iq, .{ .color = recv_color });
+
+  @export_symbol(y_ptr, "y");
+  @export_symbol(compute);
+}

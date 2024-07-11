@@ -20,11 +20,11 @@ param Mt: u16; // Height of local matrix, or num rows per PE
 param Nt: u16; // Width of local matrix, or num cols per PE
 
 // Task IDs
-param EXIT:                     local_task_id; // entrypoint to leave RPC
-param scatter_x_task_id:        local_task_id;
-param broadcast_x_down_task_id: local_task_id;
-param compute_task_id:          local_task_id;
-param gather_result_task_id:    local_task_id;
+const EXIT:                     local_task_id = @get_local_task_id(9);
+const scatter_x_task_id:        local_task_id = @get_local_task_id(10);
+const broadcast_x_down_task_id: local_task_id = @get_local_task_id(11);
+const compute_task_id:          local_task_id = @get_local_task_id(12);
+const gather_result_task_id:    local_task_id = @get_local_task_id(13);
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 

@@ -1,0 +1,69 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// One streaming D2H:
+// 1st D2H: UT 4 and UT 7
+
+param MEMCPYD2H_1 = {};
+
+// Color along which we expect a wavelet
+param USER_OUT_1 = {};
+
+param rxdir: direction;
+
+// Queue IDs
+const USER_OUT_1_iq: input_queue = @get_input_queue(7);
+const d2h_oq: output_queue = @get_output_queue(4);
+
+const max_fifo_len = 256*40; // maximum length of the fifo
+
+var fifo1_buffer = @zeros([max_fifo_len]u32);
+const fifo1 = @allocate_fifo(fifo1_buffer);
+
+const INFINITE_DSD_LEN: u16 = 0x7fff;
+
+var fab_recv_wdsd = @get_dsd(fabin_dsd, .{
+  .extent = INFINITE_DSD_LEN,
+  .fabric_color = USER_OUT_1,
+  .input_queue = USER_OUT_1_iq
+});
+
+var fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+  .extent = INFINITE_DSD_LEN,
+  .fabric_color = MEMCPYD2H_1,
+  .output_queue = d2h_oq
+});
+
+// if USER_OUT_1 is not valid, f_startup() is empty
+fn f_startup() void {
+  if (!@is_same_type(@type_of(MEMCPYD2H_1), void) and !@is_same_type(@type_of(USER_OUT_1), void)) {
+    // receive data from USER_OUT_1
+    @mov32(fifo1, fab_recv_wdsd, .{ .async = true });
+
+    // forward data to MEMCPYD2H_1
+    @mov32(fab_trans_wdsd, fifo1, .{ .async = true });
+  }
+}
+
+comptime {
+  if (!@is_same_type(@type_of(USER_OUT_1), void)) {
+    @set_local_color_config(USER_OUT_1, .{ .routes = .{ .rx = .{ rxdir }, .tx = .{ RAMP }}});
+
+    // On WSE-3, we must explicitly initialize input and output queues
+    if (@is_arch("wse3")) {
+      @initialize_queue(d2h_oq, .{ .color = MEMCPYD2H_1 });
+      @initialize_queue(USER_OUT_1_iq, .{ .color = USER_OUT_1 });
+    }
+  }
+}

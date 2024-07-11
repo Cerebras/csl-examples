@@ -17,6 +17,7 @@
 
 from itertools import product
 import argparse
+import json
 import numpy as np
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType # pylint: disable=no-name-in-module
@@ -28,10 +29,15 @@ parser.add_argument("--cmaddr", help="IP:port for CS system")
 args = parser.parse_args()
 dirname = args.name
 
+# Get params from compile metadata
+with open(f"{args.name}/out.json", encoding='utf-8') as json_file:
+  compile_data = json.load(json_file)
+
+MEMCPYD2H_DATA_1 = int(compile_data['params']['MEMCPYD2H_DATA_1_ID'])
+
 rows = 16
 cols = 16
 
-MEMCPYD2H_DATA_1 = 1
 memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
 runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
@@ -40,7 +46,7 @@ runner.run()
 
 runner.launch("f_mandelbrot", nonblock=False)
 
-# The following ISL maps describes the output tensor based on CSELFRunner
+# The following ISL map describes the output tensor:
 #   oport = f"{{ R[i=0:{rows - 1}, j=0:{cols - 1}, k=0:2] -> [PE[4, i // 4] -> index[i,j,k]] }}"
 # The last column is P4,y
 #

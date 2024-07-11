@@ -1,0 +1,73 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Colors
+param red:  color;
+param blue: color;
+
+// Queue IDs
+const blue_oq: output_queue = @get_output_queue(2);
+
+// Task IDs
+// Task ID for data task that recvs from memcpy
+const h2d_task_id: data_task_id = @get_data_task_id(sys_mod.MEMCPYH2D_1);
+
+// Task ID for data task red, consumes red wlts
+const red_task_id: data_task_id = @get_data_task_id(red);
+
+// Task ID for data task blue, consumes blue wlts
+const blue_task_id: data_task_id = @get_data_task_id(blue);
+
+// Single-elem array to hold sum of received wlts
+var sum = @zeros([1]u32);
+var ptr_sum: [*]u32 = &sum;
+
+// Task that will be triggered by red wavelet
+task red_task(in_data : u32) void {
+  sum[0] += in_data;
+}
+
+// Task that will be triggered by blue wavelet
+task blue_task(in_data : u32) void {
+  sum[0] += in_data * 2;
+}
+
+var buf = @zeros([1]u32);
+const buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> buf[i] });
+
+// PEs 0, 2 activate blue task; 1, 3 activate red task.
+const out_dsd = @get_dsd(fabout_dsd, .{
+  .extent = 1,
+  .fabric_color = blue,
+  .output_queue = blue_oq
+});
+
+// receive data from streaming H2D and forward it to color red
+task wtt_h2d(data: u32) void {
+  @block(h2d_task_id);
+  buf[0] = data;
+  @mov16(out_dsd, buf_dsd, .{ .async = true, .unblock = h2d_task_id });
+}
+
+comptime {
+  @bind_data_task(red_task, red_task_id);
+  @bind_data_task(blue_task, blue_task_id);
+  @bind_data_task(wtt_h2d, h2d_task_id);
+
+  @export_symbol(ptr_sum, "sum");
+}

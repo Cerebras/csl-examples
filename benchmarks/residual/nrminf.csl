@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // http://www.netlib.org/lapack/explore-html/d6/d12/snrm2_8f90.html
 //  SNRMINF returns the maximum of a vector
 //     SNRMINF = max(|x|)
@@ -22,21 +21,20 @@
 // @param[out] result scalar
 //                    result = max(|x|)
 
-param sizeX : i16 ; // size of x, sizeX >= n
+param sizeX: i16; // size of x, sizeX >= n
 
-fn snrminf( n: i16, x: *[sizeX]f32, result: *f32 ) void {
+fn snrminf(n: i16, x: *[sizeX]f32, result: *f32) void {
 
-    var zero: f32 = @as(f32, 0.0);
-    var nrm_r : f32 = zero;
-    var row : i16 = 0;
-    while(row < n) : (row +=1) {
-        var yi : f32 = (x.*)[row];
-        if ( zero > yi ) {
-            yi = -yi;
-        }
-        if ( nrm_r < yi ) {
-            nrm_r = yi;
-        }
+  var nrm_r: f32 = 0.0;
+
+  for (@range(i16, n)) |row| {
+    var yi: f32 = (x.*)[row];
+    if (0.0 > yi) {
+      yi = -yi;
     }
-    (result.*) = nrm_r;
+    if (nrm_r < yi) {
+      nrm_r = yi;
+    }
+  }
+  (result.*) = nrm_r;
 }

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// color/ task ID map
+// Color map/ WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
 //
 //  ID var                ID var               ID var                ID var
 //   0 MEMCPY_H2D_DATA_1   9 multiply_task_id  18                    27 reserved (memcpy)
@@ -25,46 +26,48 @@
 //   7                    16                   25                    34
 //   8                    17                   26                    35
 
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//  ID var                ID var               ID var                ID var
+//   0 reserved (memcpy)   9 multiply_task_id  18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10                   19                    28 reserved (memcpy)
+//   2 h2d_1_task_id      11                   20                    29 reserved
+//   3                    12                   21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13                   22 reserved (memcpy)  31 reserved
+//   5                    14                   23 reserved (memcpy)  32
+//   6                    15                   24                    33
+//   7                    16                   25                    34
+//   8                    17                   26                    35
+
 // IDs for memcpy streaming colors
-param MEMCPYH2D_DATA_1_ID : i16;
-param MEMCPYD2H_DATA_1_ID : i16;
+param MEMCPYH2D_DATA_1_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
 
 // Colors
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID); // Recvs input data
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID); // Signals completion to host
 
-// Task IDs
-const multiply_task_id: local_task_id = @get_local_task_id(9); // Triggers multiply
-const h2d_1_task_id:    data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_1); // Recv H2D data
-
 // The number of bits to use for the result.  Inputs, also, use the same bits.
 // Since overflow, if any, is ignored, set the bits to be large enough so that
 // the computation doesn't overflow for the numbers you care about.
-param numBits: u16;
+param num_bits: u16;
 
-const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = 1,
-    .height = 1,
-    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    });
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = 1,
+  .height = 1,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+});
 
 layout {
   @set_rectangle(1, 1);
 
   @set_tile_code(0, 0, "pe.csl", .{
     .memcpy_params = memcpy.get_params(0),
-    .multiply_task_id = multiply_task_id,
-    .h2d_1_task_id = h2d_1_task_id,
-    .numBits = numBits
+    .num_bits = num_bits
   });
 
   // export symbol name
   @export_name("result_", [*]u16, true);
   @export_name("f_run", fn(i16)void);
-}
-
-comptime{
-  @comptime_assert(MEMCPYH2D_DATA_1_ID == 0);
-  @comptime_assert(MEMCPYD2H_DATA_1_ID == 1);
 }

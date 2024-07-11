@@ -2,7 +2,7 @@
 
 set -e
 
-cslc ./layout.csl --fabric-dims=10,3 \
+cslc --arch=wse2 ./layout.csl --fabric-dims=10,3 \
 --fabric-offsets=4,1 --params=size:32 -o out \
 --params=MEMCPYH2D_DATA_1_ID:0 \
 --params=MEMCPYD2H_DATA_1_ID:1 \

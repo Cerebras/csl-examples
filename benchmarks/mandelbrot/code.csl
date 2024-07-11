@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// color/ task ID map of Mandelbrot + memcpy:
+// Color map/ task ID map of Mandelbrot + memcpy:
 //
 //  ID var                ID var              ID var                ID var
 //   0                     9 process_task_id  18                    27 reserved (memcpy)
@@ -25,7 +25,6 @@
 //   7                    16                  25                    34
 //   8 main_task_id       17                  26                    35
 //     recv_task_id
-//
 
 param MEMCPYD2H_DATA_1_ID: i16;
 
@@ -44,20 +43,18 @@ const rows_per_pe = image_height / rectangle_size;
 
 // Colors
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
-
 const routing_colors = [2]color { @get_color(2), @get_color(3) };
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = rectangle_size,
-    .height = rectangle_size,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
-    });
+  .width = rectangle_size,
+  .height = rectangle_size,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1,
+});
 
 layout {
   @set_rectangle(rectangle_size, rectangle_size);
 
   for (@range(u32, rectangle_size)) |y| {
-
     for (@range(u32, rectangle_size)) |x| {
       const ic = routing_colors[x % 2];
       const oc = routing_colors[(x + 1) % 2];
@@ -87,20 +84,13 @@ layout {
       }
 
       // 1st columm of PEs does not use in_route
-      const in_route = .{.rx=.{WEST}, .tx=.{RAMP}};
-      @set_color_config(x, y, ic, .{ .routes = in_route });
+      @set_color_config(x, y, ic, .{ .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP }}});
       // last column of PEs does not use out_route
-      const out_route = .{.rx=.{RAMP}, .tx=.{EAST}};
-      @set_color_config(x, y, oc, .{ .routes = out_route });
+      @set_color_config(x, y, oc, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST }}});
     }
   }
 
   // export symbol name
   @export_name("packet", [*]f32, true);
-
   @export_name("f_mandelbrot", fn()void);
-}
-
-comptime{
-  @comptime_assert(MEMCPYD2H_DATA_1_ID == 1);
 }

@@ -1,0 +1,97 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                ID var   ID var                ID var
+//   0                     9       18                    27 reserved (memcpy)
+//   1                    10       19                    28 reserved (memcpy)
+//   2                    11       20                    29 reserved
+//   3                    12       21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13       22 reserved (memcpy)  31 reserved
+//   5                    14       23 reserved (memcpy)  32
+//   6                    15       24                    33
+//   7                    16       25                    34
+//   8                    17       26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                ID var   ID var                ID var
+//   0 reserved (memcpy)   9       18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10       19                    28 reserved (memcpy)
+//   2                    11       20                    29 reserved
+//   3                    12       21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13       22 reserved (memcpy)  31 reserved
+//   5                    14       23 reserved (memcpy)  32
+//   6                    15       24                    33
+//   7                    16       25                    34
+//   8                    17       26                    35
+
+param memcpy_params: comptime_struct;
+
+// Colors
+param tx_color: color;
+
+// Queues
+const tx_oq: output_queue = @get_output_queue(2);
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const ctrl = @import_module("<control>");
+
+// fabout DSD used to send ctrl wavelet to fabric along tx_color
+const tx_ctrl_dsd = @get_dsd(fabout_dsd, .{
+  .extent = 1,
+  .fabric_color = tx_color,
+  .control = true,
+  .output_queue = tx_oq
+});
+
+// fabout DSD used to send data to fabric along tx_color
+const tx_data_dsd = @get_dsd(fabout_dsd, .{
+  .extent = 1,
+  .fabric_color = tx_color,
+  .output_queue = tx_oq
+});
+
+fn main_fn() void {
+  // Now we can reuse a single color to send data to the four neighbors of this PE.
+  // We do not forward the payload of this control wavelet to the CE,
+  // so no entrypoint or data is needed.
+  const switch_adv_pld = ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0);
+
+  @mov32(tx_ctrl_dsd, switch_adv_pld);
+  @mov32(tx_data_dsd, 0);
+
+  @mov32(tx_ctrl_dsd, switch_adv_pld);
+  @mov32(tx_data_dsd, 2);
+
+  @mov32(tx_ctrl_dsd, switch_adv_pld);
+  @mov32(tx_data_dsd, 4);
+
+  @mov32(tx_ctrl_dsd, switch_adv_pld);
+  @mov32(tx_data_dsd, 6);
+
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(tx_oq, .{ .color = tx_color });
+  }
+
+  @export_symbol(main_fn);
+}

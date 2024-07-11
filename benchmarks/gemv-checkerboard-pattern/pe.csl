@@ -16,17 +16,8 @@
 
 param memcpy_params: comptime_struct;
 
-// Colors
-param x_in: color; // receive x from north except 1st row
-                   // the data is broadcasted by 1st row
-param send: color; // checkerboard color, sends result EAST
-param recv: color; // checkerboard color, recvs result from WEST except 1st column
-
-// Task IDs
-param REDUCE: local_task_id; // entrypoint to perform chain reduction when y = A*x is done
-const h2d_x_task_id: data_task_id = @get_data_task_id(sys_mod.MEMCPYH2D_1);
-const h2d_b_task_id: data_task_id = @get_data_task_id(sys_mod.MEMCPYH2D_2);
-const x_in_task_id:  data_task_id = @get_data_task_id(x_in);
+// memcpy reserves input queue 0 and output queue 0
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
 
 // dims of A, X, B chunks on PE
 param A_local_dim_x : i16;
@@ -40,9 +31,43 @@ param B_local_dim_y : i16;
 
 param last_column: bool;
 
-// memcpy reserves input queue 0 and output queue 0
-const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+// Colors
+param x_in: color; // receive x from north except 1st row
+                   // the data is broadcasted by 1st row
+param send: color; // checkerboard color, sends result EAST
+param recv: color; // checkerboard color, recvs result from WEST except 1st column
 
+// Queue IDs
+// These input queues are bound to tasks for WSE-3
+const h2d_x_iq: input_queue  = @get_input_queue(2);
+const h2d_b_iq: input_queue  = @get_input_queue(3);
+const x_in_iq:  input_queue  = @get_input_queue(4);
+
+// These queues are used in microthreaded ops on WSE-2 and WSE-3
+const send_oq:  output_queue = @get_output_queue(2);
+const x_in_oq:  output_queue = @get_output_queue(3);
+const recv_oq:  output_queue = @get_output_queue(4);
+const recv_iq:  input_queue  = @get_input_queue(5);
+
+// Task IDs
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+// Data task h2d_x_task triggered by wlts along MEMCPYH2D_DATA_1
+const h2d_x_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_1)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_x_iq);
+
+// Data task h2d_b_task triggered by wlts along MEMCPYH2D_DATA_2
+const h2d_b_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_2)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_b_iq);
+
+// Data task fmac_task triggered by wlts along x_in
+const x_in_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(x_in)
+  else if (@is_arch("wse3")) @get_data_task_id(x_in_iq);
+
+// entrypoint to perform chain reduction when y = A*x is done
+const REDUCE: local_task_id = @get_local_task_id(24);
 
 // A is A_local_dim_x-by-A_local_dim_y in row-major
 var A = @zeros([A_local_dim_x, A_local_dim_y]f16);
@@ -51,13 +76,17 @@ var A = @zeros([A_local_dim_x, A_local_dim_y]f16);
 export var mul_temp = @zeros([A_local_dim_x]f16);
 var ptr_A: [*]f16 = &A;
 
-const dsd_A = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> A[i, 0], .wavelet_index_offset=true});
+const dsd_A = @get_dsd(mem1d_dsd, .{
+  .tensor_access = |i|{A_local_dim_x} -> A[i, 0],
+  .wavelet_index_offset = true
+});
+
 const dsd_mul_temp = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{A_local_dim_x} -> mul_temp[i]});
 
 const dsd_in = @get_dsd(fabin_dsd, .{
     .fabric_color = recv,
     .extent = B_local_dim_x,
-    .input_queue = @get_input_queue(1)
+    .input_queue = recv_iq
   });
 
 export var num_recv_x: i16 = 0;
@@ -65,11 +94,11 @@ export var num_recv_x: i16 = 0;
 // receive xj = x[j]
 // compute y(:) += A(:,j)*xj
 // When WTT finishes, y = A*x, compute y = A*x + y_west
-task fmac_task(wlet_data : f16, idx : u16) void {
-  @fmach(dsd_mul_temp, dsd_mul_temp, dsd_A, wlet_data, .{.index = idx});
+task fmac_task(wlet_data: f16, idx: u16) void {
+  @fmach(dsd_mul_temp, dsd_mul_temp, dsd_A, wlet_data, .{ .index = idx });
   num_recv_x += 1;
   // trigger chain reduction when last xj is received and y = A*x is done
-  if (num_recv_x >= X_local_dim_x){
+  if (num_recv_x >= X_local_dim_x) {
     @activate(REDUCE);
   }
 }
@@ -88,13 +117,9 @@ task reduce_task() void {
   const dsd_out = @get_dsd(fabout_dsd, .{
     .fabric_color = if (last_column) sys_mod.MEMCPYD2H_1 else send,
     .extent = B_local_dim_x,
-    .output_queue = @get_output_queue(2)
+    .output_queue = send_oq
   });
   @faddh(dsd_out, dsd_in, dsd_mul_temp, .{ .async = true });
-}
-
-comptime {
-  @bind_data_task(fmac_task, x_in_task_id);
 }
 
 var buf = @zeros([1]u32);
@@ -103,41 +128,52 @@ const mem_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> buf[i] });
 const fab_trans_x_wdsd = @get_dsd(fabout_dsd, .{
     .extent = 1,
     .fabric_color = x_in,
-    .output_queue = @get_output_queue(5)
+    .output_queue = x_in_oq
   });
 
 // 1st row receives x from MEMCPYH2D_DATA_1, then
 // forwards data to the whole column, including itself, via color "x_in"
-task wtt_memcpyh2d_x( data : u32 ) void {
-    @block(sys_mod.MEMCPYH2D_1);
-    buf[0] = data;
-    @mov32(fab_trans_x_wdsd, mem_buf_dsd, .{.async=true, .unblock=h2d_x_task_id });
+task wtt_memcpyh2d_x(data: u32) void {
+  @block(h2d_x_task_id);
+  buf[0] = data;
+  @mov32(fab_trans_x_wdsd, mem_buf_dsd, .{ .async = true, .unblock = h2d_x_task_id });
 }
 
 const fab_trans_b_wdsd = @get_dsd(fabout_dsd, .{
-    .extent = 1,
-    .fabric_color = recv,
-    .output_queue = @get_output_queue(5)
-  });
+  .extent = 1,
+  .fabric_color = recv,
+  .output_queue = recv_oq
+});
 
 // 1st column receives b from MEMCPYH2D_DATA_2, then
 // forwards data to itself via color "recv"
-task wtt_memcpyh2d_b( data : u32 ) void {
-    @block(sys_mod.MEMCPYH2D_2);
-    buf[0] = data;
-    @mov32(fab_trans_b_wdsd, mem_buf_dsd, .{.async=true, .unblock=h2d_b_task_id });
+task wtt_memcpyh2d_b(data: u32) void {
+  @block(h2d_b_task_id);
+  buf[0] = data;
+  @mov32(fab_trans_b_wdsd, mem_buf_dsd, .{ .async = true, .unblock = h2d_b_task_id });
 }
 
-comptime{
+comptime {
   @comptime_assert(X_local_dim_y == 1);
   @comptime_assert(B_local_dim_y == 1);
 
   @bind_data_task(wtt_memcpyh2d_x, h2d_x_task_id);
   @bind_data_task(wtt_memcpyh2d_b, h2d_b_task_id);
-
+  @bind_data_task(fmac_task, x_in_task_id);
   @bind_local_task(reduce_task, REDUCE);
-}
 
-comptime{
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    // These input queues are bound to tasks for WSE-3
+    @initialize_queue(h2d_x_iq, .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(h2d_b_iq, .{ .color = sys_mod.MEMCPYH2D_2 });
+    @initialize_queue(x_in_iq,  .{ .color = x_in });
+    // These queues are used in microthreaded ops on WSE-2 and WSE-3
+    @initialize_queue(send_oq,  .{ .color = if (last_column) sys_mod.MEMCPYD2H_1 else send });
+    @initialize_queue(x_in_oq,  .{ .color = x_in });
+    @initialize_queue(recv_oq,  .{ .color = recv });
+    @initialize_queue(recv_iq,  .{ .color = recv });
+  }
+
   @export_symbol(ptr_A, "A");
 }

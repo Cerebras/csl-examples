@@ -23,9 +23,6 @@ The routing configuration of color ``C1`` is RAMP to RAMP because
 1) the FIFO pops data to the router via ``C1`` and
 2) ``@add16`` receives data from the router via ``C1``
 
-We also block the color ``C1`` because ``@add16`` receives data via microthread
-3.
-
 The disadvantage of this approach is the resource consumption. The FIFO
 requires two microthreads and a scratch buffer.
 

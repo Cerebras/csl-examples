@@ -34,10 +34,6 @@ const MEMCPYH2D_DATA_2: color = @get_color(MEMCPYH2D_DATA_2_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
 
 // Task IDs
-const recv_x_task_id:        data_task_id  = @get_data_task_id(x_color); // Task ID for WTT
-const memcpy_recv_x_task_id: data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_1);
-const memcpy_recv_b_task_id: data_task_id  = @get_data_task_id(MEMCPYH2D_DATA_2);
-const reduce_task_id:        local_task_id = @get_local_task_id(10);
 
 // This example uses kernel_x_dim x kernel_y_dim PEs
 const memcpy = @import_module("<memcpy/get_params>", .{
@@ -57,13 +53,7 @@ layout {
     .N_per_PE = N / kernel_x_dim,
     .kernel_x_dim = kernel_x_dim,
     .kernel_y_dim = kernel_y_dim,
-    // Colors
     .x_color = x_color,
-    // Task IDs
-    .recv_x_task_id = recv_x_task_id,
-    .memcpy_recv_x_task_id = memcpy_recv_x_task_id,
-    .memcpy_recv_b_task_id = memcpy_recv_b_task_id,
-    .reduce_task_id = reduce_task_id
   };
 
   const even_params = @concat_structs(common_params, .{

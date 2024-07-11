@@ -12,33 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Not a complete program; the top-level source file is code.csl.
-
-param size: i16;
-param main: u16;
-
 param memcpy_params: comptime_struct;
 
-const main_task_id: local_task_id = @get_local_task_id(main);
+// number of elements received from host
+param size: i16;
 
-const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-const inDsd = @get_dsd(fabin_dsd, .{
+// Queues
+const h2d_1_iq: input_queue = @get_input_queue(2);
+const d2h_1_oq: output_queue = @get_output_queue(3);
+
+// Task IDs
+const main_task_id: local_task_id = @get_local_task_id(8);
+
+const in_dsd = @get_dsd(fabin_dsd, .{
   .extent = size,
   .fabric_color = sys_mod.MEMCPYH2D_1,
-  .input_queue = @get_input_queue(1),
+  .input_queue = h2d_1_iq
 });
 
-const outDsd = @get_dsd(fabout_dsd, .{
+const out_dsd = @get_dsd(fabout_dsd, .{
   .extent = size,
   .fabric_color = sys_mod.MEMCPYD2H_1,
-  .output_queue = @get_output_queue(1)
+  .output_queue = d2h_1_oq
 });
 
 var buf = @zeros([1]i16);
 const one_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{size} -> buf[0] });
 
-task mainTask() void {
+task main_task() void {
   // WARNING: large size can stall.
   // H2D and D2H are serialized. It is NOT safe to run "send" and "recv"
   // involving memcpy at the same time on the same PE.
@@ -51,12 +54,17 @@ task mainTask() void {
   // H2D cannot finish and D2H has no chance to run.
 
   buf[0] = @as(i16, 1);
-  @add16(outDsd, inDsd, one_dsd, .{.async=true});
+  @add16(out_dsd, in_dsd, one_dsd, .{ .async = true });
 }
 
 comptime {
-
-  // activate local task mainTask at startup
-  @bind_local_task(mainTask, main_task_id);
+  // activate local task main_task at startup
   @activate(main_task_id);
+  @bind_local_task(main_task, main_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_1_iq,  .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(d2h_1_oq,  .{ .color = sys_mod.MEMCPYD2H_1 });
+  }
 }

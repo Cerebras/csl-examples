@@ -26,7 +26,7 @@ const N: i16 = 6;
 var A: [M*N]f32; // A is stored row major
 var x: [N]f32;
 var b: [M]f32;
-var y: [M]f32;
+var y = @zeros([M]f32); // Initialize y to zero
 
 // DSDs for accessing A, b, y
 // A_dsd accesses column of A

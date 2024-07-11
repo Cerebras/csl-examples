@@ -31,13 +31,14 @@ const math_lib = @import_module("<math>");
 
 const blas_lib = @import_module("blas.csl");
 
-// input/output queue ID = 0 is reserved for memcpy module
+// memcpy module reserves
+// - input/output queue 0 and 1
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // allreduce uses input queue/output queue 1
 const reduce_mod = @import_module( "../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
-     .queues = [1]u16{1},
+     .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
      .src0_dsr_ids = [1]u16{1},
      .src1_dsr_ids = [1]u16{1}
@@ -46,8 +47,9 @@ const reduce_mod = @import_module( "../csl-libs/allreduce/pe.csl", @concat_struc
 // output queue cannot overlap input queues
 const stencil_mod = @import_module( "../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
-     .input_queues = [4]u16{3, 4, 5, 6},
-     .output_queues = [1]u16{2},
+     .input_queues = [4]u16{4, 5, 6, 7},
+     .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
+     .output_ut_id = 3,
      .BLOCK_SIZE = BLOCK_SIZE,
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},

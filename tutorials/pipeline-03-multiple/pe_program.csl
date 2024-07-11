@@ -12,49 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Not a complete program; the top-level source file is code.csl.
+param memcpy_params: comptime_struct;
 
 param size: i16;
-param main: u16;
 
 param Cin: color;
 param Cout: color;
 
-param memcpy_params: comptime_struct;
+// Queue IDs
+const Cin_iq: input_queue = @get_input_queue(2);
+const Cout_oq: output_queue = @get_output_queue(3);
 
-const main_task_id: local_task_id = @get_local_task_id(main);
+// Task IDs
+const main_task_id: local_task_id = @get_local_task_id(8);
 
-const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-const inDsd = @get_dsd(fabin_dsd, .{
+const Cin_in_dsd = @get_dsd(fabin_dsd, .{
   .extent = size,
   .fabric_color = Cin,
-  .input_queue = @get_input_queue(1),
+  .input_queue = Cin_iq,
 });
 
-const outDsd = @get_dsd(fabout_dsd, .{
+const Cout_out_dsd = @get_dsd(fabout_dsd, .{
   .extent = size,
   .fabric_color = Cout,
-  .output_queue = @get_output_queue(1)
+  .output_queue = Cout_oq,
 });
 
-var buf = @zeros([1]i16);
+const buf = [1]i16{ 1 };
 const one_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{size} -> buf[0] });
 
-task mainTask() void {
-
-  buf[0] = @as(i16, 1);
-  @add16(outDsd, inDsd, one_dsd, .{.async=true});
+task main_task() void {
+  @add16(Cout_out_dsd, Cin_in_dsd, one_dsd, .{ .async = true });
 }
 
 comptime {
-  // activate local task mainTask at startup
-  @bind_local_task(mainTask, main_task_id);
+  // activate local task main_task at startup
+  @bind_local_task(main_task, main_task_id);
   @activate(main_task_id);
 
-  const input_route = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
-  @set_local_color_config(Cin, .{ .routes = input_route });
+  @set_local_color_config(Cin, .{ .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP }}});
+  @set_local_color_config(Cout, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST }}});
 
-  const output_route = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
-  @set_local_color_config(Cout, .{ .routes = output_route });
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(Cin_iq, .{ .color = Cin });
+    @initialize_queue(Cout_oq, .{ .color = Cout });
+  }
 }

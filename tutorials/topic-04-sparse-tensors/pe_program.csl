@@ -1,0 +1,54 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; the top-level source file is layout.csl.
+
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Queue IDs
+const h2d_data_1_iq: input_queue = @get_input_queue(2);
+const d2h_data_1_oq: output_queue = @get_output_queue(3);
+
+// Data task main_task triggered by wlts along MEMCPYH2D_DATA_1
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+const main_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_1)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_data_1_iq);
+
+var result = [4]i16 { 0, 0, 0, 0 };
+
+const out_dsd = @get_dsd(fabout_dsd, .{
+   .extent = 1,
+   .fabric_color = sys_mod.MEMCPYD2H_1,
+   .output_queue = d2h_data_1_oq
+});
+
+task main_task(wavelet_data: i16, index: i16) void {
+  result[index] = wavelet_data;
+  // The non-async operation works here because only two wavelet are sent
+  // It would be better to use async operation with .{async = true}
+  @mov16(out_dsd, wavelet_data);
+}
+
+comptime {
+  @bind_data_task(main_task, main_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_data_1_iq, .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(d2h_data_1_oq, .{ .color = sys_mod.MEMCPYD2H_1 });
+  }
+}

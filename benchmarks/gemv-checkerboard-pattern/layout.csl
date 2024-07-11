@@ -12,19 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// color/ task ID map of histogram-torus + memcpy:
+// Color map/ WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
 //
-//  ID var     ID var     ID var                ID var
-//   0          9         18                    27 reserved (memcpy)
-//   1 x_in    10 H2D_1   19                    28 reserved (memcpy)
-//   2         11 H2D_2   20                    29 reserved
-//   3 ax_out  12 D2H     21 reserved (memcpy)  30 reserved (memcpy)
-//   4 b_in    13         22 reserved (memcpy)  31 reserved
-//   5         14         23 reserved (memcpy)  32
-//   6         15         24 REDUCE             33
-//   7         16         25                    34
-//   8         17         26                    35
-//
+//  ID var                ID var          ID var                ID var
+//   0                     9              18                    27 reserved (memcpy)
+//   1 x_in               10 MEMCPYH2D_1  19                    28 reserved (memcpy)
+//   2                    11 MEMCPYH2D_2  20                    29 reserved
+//   3 ax_out             12 MEMCPYD2H_1  21 reserved (memcpy)  30 reserved (memcpy)
+//   4 b_in               13              22 reserved (memcpy)  31 reserved
+//   5                    14              23 reserved (memcpy)  32
+//   6                    15              24 REDUCE             33
+//   7                    16              25                    34
+//   8                    17              26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//  ID var                ID var          ID var                ID var
+//   0 reserved (memcpy)   9              18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10              19                    28 reserved (memcpy)
+//   2 h2d_x_task_id      11              20                    29 reserved
+//   3 h2d_b_task_id      12              21 reserved (memcpy)  30 reserved (memcpy)
+//   4 x_in_task_id       13              22 reserved (memcpy)  31 reserved
+//   5                    14              23 reserved (memcpy)  32
+//   6                    15              24 REDUCE             33
+//   7                    16              25                    34
+//   8                    17              26                    35
 
 // This does y = Ax + b where
 // the matrix A is matrix_rows-by-matrix_cols,
@@ -40,12 +53,12 @@ param MEMCPYH2D_DATA_2_ID: i16;
 param MEMCPYD2H_DATA_1_ID: i16;
 
 // Program uses 4x4 rectangle of PEs
-param kernel_rows : i16; // Height of kernel
-param kernel_cols : i16; // Width of kernel
+param kernel_rows: i16; // Height of kernel
+param kernel_cols: i16; // Width of kernel
 
 // Global A, B, X dims
-param matrix_rows : i16; // Height of matrix
-param matrix_cols : i16; // Width of matrix
+param matrix_rows: i16; // Height of matrix
+param matrix_cols: i16; // Width of matrix
 
 // Colors
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
@@ -56,35 +69,32 @@ param x_in:   color;   // color for input X from NORTH to kernel
 param b_in:   color;   // checkerboard pattern, color for input B from WEST to kernel
 param ax_out: color;   // checkerboard pattern, alternate color for passing result towards EAST
 
-// Task IDs
-const REDUCE: local_task_id = @get_local_task_id(24);
+const A_rows: i16 = matrix_rows;
+const A_cols: i16 = matrix_cols;
 
-const A_rows : i16 = matrix_rows;
-const A_cols : i16 = matrix_cols;
+const X_rows: i16 = matrix_cols;
+const X_cols: i16 = 1;
 
-const X_rows : i16 = matrix_cols;
-const X_cols : i16 = 1;
-
-const B_rows : i16 = matrix_rows;
-const B_cols : i16 = 1;
+const B_rows: i16 = matrix_rows;
+const B_cols: i16 = 1;
 
 // A, B, X dims per PE
-const A_local_dim_x : i16 = A_rows / kernel_rows;
-const A_local_dim_y : i16 = A_cols / kernel_cols;
+const A_local_dim_x: i16 = A_rows / kernel_rows;
+const A_local_dim_y: i16 = A_cols / kernel_cols;
 
-const X_local_dim_x : i16 = X_rows / kernel_rows;
-const X_local_dim_y : i16 = X_cols;
+const X_local_dim_x: i16 = X_rows / kernel_rows;
+const X_local_dim_y: i16 = X_cols;
 
-const B_local_dim_x : i16 = B_rows / kernel_rows;
-const B_local_dim_y : i16 = B_cols;
+const B_local_dim_x: i16 = B_rows / kernel_rows;
+const B_local_dim_y: i16 = B_cols;
 
-const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = kernel_cols,
-    .height = kernel_rows,
-    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
-    });
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = kernel_cols,
+  .height = kernel_rows,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYH2D_2 = MEMCPYH2D_DATA_2,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+});
 
 layout {
   // @set_rectangle takes width and height arguments in order.
@@ -108,7 +118,6 @@ layout {
       const last_column: bool = (i == kernel_cols - 1);
       const dim_memcpy = @concat_structs( .{
         .memcpy_params = memcpy_params,
-        .REDUCE = REDUCE,
         .last_column = last_column
       }, dimensions);
 
@@ -121,12 +130,12 @@ layout {
   }
 
   // Create route values
-  const RX_R_TX_RS = .{.rx=.{RAMP}, .tx=.{RAMP, SOUTH}};
-  const RX_N_TX_RS = .{.rx=.{NORTH}, .tx=.{RAMP, SOUTH}};
-  const RX_N_TX_R = .{.rx=.{NORTH}, .tx=.{RAMP}};
-  const RX_W_TX_R = .{.rx=.{WEST}, .tx=.{RAMP}};
-  const RX_R_TX_E = .{.rx=.{RAMP}, .tx=.{EAST}};
-  const RX_R_TX_R = .{.rx=.{RAMP}, .tx=.{RAMP}};
+  const RX_R_TX_RS = .{ .rx = .{ RAMP }, .tx = .{ RAMP, SOUTH }};
+  const RX_N_TX_RS = .{ .rx = .{ NORTH }, .tx = .{ RAMP, SOUTH }};
+  const RX_N_TX_R = .{ .rx = .{ NORTH }, .tx = .{ RAMP }};
+  const RX_W_TX_R = .{ .rx = .{ WEST }, .tx = .{ RAMP }};
+  const RX_R_TX_E = .{ .rx = .{ RAMP }, .tx = .{ EAST }};
+  const RX_R_TX_R = .{ .rx = .{ RAMP }, .tx = .{ RAMP }};
 
   for (@range(i16, kernel_cols)) |i| {
     for (@range(i16, kernel_rows)) |j| {
@@ -138,12 +147,12 @@ layout {
       // On last column, however, b_in is not used.
       // On leftmost (0th) column, b_in receives B from the host.
       if (i == 0){
-        @set_color_config(i, j, b_in, .{.routes = RX_R_TX_R });
+        @set_color_config(i, j, b_in, .{ .routes = RX_R_TX_R });
       }else{
         if (i % 2 == 0) {
-          @set_color_config(i, j, b_in, .{.routes = RX_W_TX_R });
+          @set_color_config(i, j, b_in, .{ .routes = RX_W_TX_R });
         } else {
-          @set_color_config(i, j, b_in, .{.routes = RX_R_TX_E });
+          @set_color_config(i, j, b_in, .{ .routes = RX_R_TX_E });
         }
       }
 
@@ -152,9 +161,9 @@ layout {
       // On odd columns, ax_out is "recv" color, receiving values
       // from west and transmitting down ramp for computation.
       if (i % 2 == 0) {
-        @set_color_config(i, j, ax_out, .{.routes = RX_R_TX_E });
+        @set_color_config(i, j, ax_out, .{ .routes = RX_R_TX_E });
       } else {
-        @set_color_config(i, j, ax_out, .{.routes = RX_W_TX_R });
+        @set_color_config(i, j, ax_out, .{ .routes = RX_W_TX_R });
       }
 
       // first row receives data from streaming H2D
@@ -162,11 +171,11 @@ layout {
       // All rows except last row must also propagate X values south.
       // The last row will not propagate X values.
       if (j == kernel_rows - 1) {
-        @set_color_config(i, j, x_in, .{.routes = RX_N_TX_R});
+        @set_color_config(i, j, x_in, .{ .routes = RX_N_TX_R });
       } else if (j == 0 ){
-        @set_color_config(i, j, x_in, .{.routes = RX_R_TX_RS});
+        @set_color_config(i, j, x_in, .{ .routes = RX_R_TX_RS });
       } else {
-        @set_color_config(i, j, x_in, .{.routes = RX_N_TX_RS});
+        @set_color_config(i, j, x_in, .{ .routes = RX_N_TX_RS });
       }
     }
   }

@@ -1,0 +1,117 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                ID var  ID var                ID var
+//   0                     9      18                    27 reserved (memcpy)
+//   1                    10      19                    28 reserved (memcpy)
+//   2 wtt_in_1_task_id   11      20                    29 reserved
+//   3 wtt_in_2_task_id   12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                ID var  ID var                ID var
+//   0 reserved (memcpy)   9      18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10      19                    28 reserved (memcpy)
+//   2 wtt_in_1_task_id   11      20                    29 reserved
+//   3 wtt_in_2_task_id   12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const ctrl = @import_module("<control>");
+
+// Sentinel to signal end of data
+param sentinel: u16;
+
+// Colors
+param main_color: color;
+
+// Queue IDs
+const h2d_1_iq: input_queue  = @get_input_queue(2);
+const h2d_2_iq: input_queue  = @get_input_queue(3);
+const main_oq:  output_queue = @get_output_queue(4);
+
+// Task IDs
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+// Task ID for data task that recvs number of expected elements from host
+const wtt_in_1_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_1)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_1_iq);
+
+// Task ID for data task that receives actual data from host
+const wtt_in_2_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(sys_mod.MEMCPYH2D_2)
+  else if (@is_arch("wse3")) @get_data_task_id(h2d_2_iq);
+
+const sentinel_task_id: control_task_id = @get_control_task_id(sentinel);
+
+var num_wvlts: i16 = 0;
+var index: i16 = 0;
+
+const fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = main_color,
+    .output_queue = main_oq
+});
+
+const fab_trans_ctrl_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .control = true,
+    .fabric_color = main_color,
+    .output_queue = main_oq
+});
+
+// MEMCPYH2D_1 receives number of wavelets of MEMPCYH2D_2
+task wtt_h2d_in_1(data: u32) void {
+  num_wvlts = @as(i16, data);
+}
+
+// MEMCPYH2D_2 forwards data to main_color and appends a sentinel
+// at the end.
+task wtt_h2d_in_2(data: u32) void {
+  @mov32(fab_trans_wdsd, data);
+  index += 1;
+  if (index >= num_wvlts) {
+     // Construct ctrl wlt with sentinel control task ID encoded
+     const ctrl_wvlt = ctrl.encode_control_task_payload(sentinel_task_id);
+     @mov32(fab_trans_ctrl_wdsd, ctrl_wvlt);
+     index = 0;
+  }
+}
+
+comptime {
+  @bind_data_task(wtt_h2d_in_1, wtt_in_1_task_id);
+  @bind_data_task(wtt_h2d_in_2, wtt_in_2_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(h2d_1_iq, .{ .color = sys_mod.MEMCPYH2D_1 });
+    @initialize_queue(h2d_2_iq, .{ .color = sys_mod.MEMCPYH2D_2 });
+    @initialize_queue(main_oq,  .{ .color = main_color });
+  }
+}

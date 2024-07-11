@@ -1,0 +1,88 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                ID var  ID var                ID var
+//   0                     9      18                    27 reserved (memcpy)
+//   1                    10      19                    28 reserved (memcpy)
+//   2                    11      20                    29 reserved
+//   3                    12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+//   ...
+//  40 recv_ctrl_id
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                ID var  ID var                ID var
+//   0 reserved (memcpy)   9      18                    27 reserved (memcpy)
+//   1 reserved (memcpy)  10      19                    28 reserved (memcpy)
+//   2                    11      20                    29 reserved
+//   3                    12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4                    13      22 reserved (memcpy)  31 reserved
+//   5                    14      23 reserved (memcpy)  32
+//   6                    15      24                    33
+//   7                    16      25                    34
+//   8                    17      26                    35
+//   ...
+//  40 recv_ctrl_id
+
+param memcpy_params: comptime_struct;
+
+// Colors
+param rx_color: color;
+
+// Queues
+const rx_iq: input_queue = @get_input_queue(2);
+
+// Task IDs
+const recv_ctrl_id: control_task_id = @get_control_task_id(40);
+
+var result = @zeros([1]u32);
+const result_ptr: [*]u32 = &result;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// main_fn does nothing on recv PEs
+fn main_fn() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+// Control task receives 16-bit data from ctrl wavelet paylaod
+task recv_ctrl_task(data: u16) void {
+  result[0] = @as(u32, data);
+}
+
+comptime {
+  @bind_control_task(recv_ctrl_task, recv_ctrl_id);
+
+  // Since there is no data task receiving wlts along rx_color, color/ queue
+  // must be explicitly unblocked for CE to receive and ctrl task to be activated
+  // On WSE-2, we unblock color. On WSE-3, we unblock queue to which color is bound
+  if (@is_arch("wse3")) @unblock(rx_iq) else @unblock(rx_color);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(rx_iq, .{ .color = rx_color });
+  }
+
+  @export_symbol(result_ptr, "result");
+  @export_symbol(main_fn);
+}

@@ -1,0 +1,85 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Not a complete program; the top-level source file is layout.csl.
+param memcpy_params: comptime_struct;
+
+param size: i16;
+
+// Task IDs
+param main_task_id: local_task_id;
+
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpy_params);
+const math_lib = @import_module("<math>");
+
+// A transformed in place by @map operation 2
+var A = @constants([size, size]f32, 42.0);
+var ptr_A: [*]f32 = &A;
+
+const B = [size]i32{10, 20, 30, 40, 50};
+
+// Copied in from the host
+var weight = @zeros([size]f32);
+var ptr_weight: [*]f32 = &weight;
+
+// sqrt_diag_A computed by @map operation 1
+var sqrt_diag_A = @zeros([size]f32);
+var ptr_sqrt_diag_A: [*]f32 = &sqrt_diag_A;
+
+// sum computed by @map operation 3
+var sum = @zeros([1]i32);
+var ptr_sum: [*]i32 = &sum;
+
+// The loop structure is implicitly specified by the memory DSD descriptions
+const dsdA = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{size} -> A[i, i]});
+const dsdB = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{size} -> B[i]});
+
+const dsd_sqrt_diag_A = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{size} -> sqrt_diag_A[i]});
+const dsd_weight = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{size} -> weight[i]});
+
+
+fn transformation(value: f32, coeff1: f32, coeff2: f32, weight: f32) f32 {
+  return value * (coeff1 + weight) + value * (coeff2 + weight);
+}
+
+fn reduction(value: i32, sum: *i32) i32 {
+  return sum.* + value;
+}
+
+fn f_run() void {
+  // @map operation 1
+  // Compute the square-root of each element of `dsdA` and send it
+  // to `dsd_sqrt_diag_A`. We avoid writing an explicit loop and rely
+  // on the DSD description instead.
+  @map(math_lib.sqrt_f32, dsdA, dsd_sqrt_diag_A);
+
+  // @map operation 2
+  // Transform tensor A in-place through a custom calculation.
+  @map(transformation, dsdA, 2.0, 6.0, dsd_weight, dsdA);
+
+  // @map operation 3
+  // Compute the sum of all elements in tensor B.
+  @map(reduction, dsdB, &sum[0], &sum[0]);
+
+  // WARNING: the user must unblock cmd color for every PE
+  sys_mod.unblock_cmd_stream();
+}
+
+comptime{
+  @export_symbol(ptr_weight, "weight");
+  @export_symbol(ptr_sqrt_diag_A, "sqrt_diag_A");
+  @export_symbol(ptr_A, "A");
+  @export_symbol(ptr_sum, "sum");
+  @export_symbol(f_run);
+}

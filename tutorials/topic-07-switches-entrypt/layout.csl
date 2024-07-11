@@ -1,0 +1,110 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Color map
+//
+//  ID var           ID var  ID var                ID var
+//   0 channel        9      18                    27 reserved (memcpy)
+//   1               10      19                    28 reserved (memcpy)
+//   2               11      20                    29 reserved
+//   3               12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4               13      22 reserved (memcpy)  31 reserved
+//   5               14      23 reserved (memcpy)  32
+//   6               15      24                    33
+//   7               16      25                    34
+//   8               17      26                    35
+
+// See task maps in send.csl and recv.csl
+
+// Colors
+const channel: color = @get_color(0);
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = 3,
+  .height = 3,
+  });
+
+layout {
+  @set_rectangle(3, 3);
+
+  const memcpy_params_0 = memcpy.get_params(0);
+  const memcpy_params_1 = memcpy.get_params(1);
+  const memcpy_params_2 = memcpy.get_params(2);
+
+  // The core has 3-by-3 rectangle of PEs.
+  // Out of the nine PEs, the PE in the center (PE #1,1) will send four
+  // control wavelets to the PE's four adjacent neighbors.  These four
+  // adjacent numbers are programmed to receive the control wavelets, whereas
+  // all other PEs (i.e. the PEs at the corners of the rectangle) are
+  // programmed to contain no instructions or routes.
+
+  // Sender
+  @set_tile_code(1, 1, "send.csl", .{
+    .memcpy_params = memcpy_params_1, .tx_color = channel,
+  });
+
+  const sender_routes = .{
+    // The default route, which is to receive from ramp and send to north
+    .rx = .{ RAMP },
+    .tx = .{ NORTH }
+  };
+
+  const sender_switches = .{
+    // Upon a control wavelet, change the transmit direction to west
+    .pos1 = .{ .tx = WEST },
+    // Upon another control wavelet, change the transmit direction to east
+    .pos2 = .{ .tx = EAST },
+    // Upon yet another control wavelet, change the transmit direction to south
+    .pos3 = .{ .tx = SOUTH },
+    // Send to west PE first, then east PE, then south PE, and then north PE
+    .current_switch_pos = 1,
+    // Wrap around from position 3 to position 0 after receiving control wavelet
+    .ring_mode = true,
+  };
+
+  @set_color_config(1, 1, channel, .{ .routes = sender_routes,
+                                      .switches = sender_switches });
+
+
+  // Receivers
+  @set_tile_code(1, 0, "recv.csl", .{
+    .memcpy_params = memcpy_params_1, .rx_color = channel,
+  });
+  @set_color_config(1, 0, channel, .{ .routes = .{ .rx = .{ SOUTH }, .tx = .{ RAMP }}});
+
+  @set_tile_code(0, 1, "recv.csl", .{
+    .memcpy_params = memcpy_params_0, .rx_color = channel,
+  });
+  @set_color_config(0, 1, channel, .{ .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP }}});
+
+  @set_tile_code(2, 1, "recv.csl", .{
+    .memcpy_params = memcpy_params_2, .rx_color = channel,
+  });
+  @set_color_config(2, 1, channel, .{ .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP }}});
+
+  @set_tile_code(1, 2, "recv.csl", .{
+    .memcpy_params = memcpy_params_1, .rx_color = channel,
+  });
+  @set_color_config(1, 2, channel, .{ .routes = .{ .rx = .{ NORTH }, .tx = .{ RAMP }}});
+
+  // Empty PEs
+  @set_tile_code(0, 0, "empty.csl", .{ .memcpy_params = memcpy_params_0 });
+  @set_tile_code(2, 0, "empty.csl", .{ .memcpy_params = memcpy_params_2 });
+  @set_tile_code(0, 2, "empty.csl", .{ .memcpy_params = memcpy_params_0 });
+  @set_tile_code(2, 2, "empty.csl", .{ .memcpy_params = memcpy_params_2 });
+
+  // export symbol names
+  @export_name("result", [*]u32, false);
+  @export_name("main_fn", fn()void);
+}

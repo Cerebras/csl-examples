@@ -12,23 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// resources to route the data between the host and the device.
+// Color/ task ID map
 //
+//  ID var           ID var  ID var                ID var
+//   0 MEMCPYH2D_1    9  C1  18                    27 reserved (memcpy)
+//   1 MEMCPYD2H_1   10      19                    28 reserved (memcpy)
+//   2               11      20                    29 reserved
+//   3               12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4               13      22 reserved (memcpy)  31 reserved
+//   5               14      23 reserved (memcpy)  32
+//   6               15      24                    33
+//   7               16      25                    34
+//   8 main_task_id  17      26                    35
 
-// color/ task ID map
-//
-//  ID var       ID var         ID var               ID var
-//   0 H2D        9  C1         18                   27 reserved (memcpy)
-//   1 D2H       10             19                   28 reserved (memcpy)
-//   2           11             20                   29 reserved
-//   3           12             21 reserved (memcpy) 30 reserved (memcpy)
-//   4           13             22 reserved (memcpy) 31 reserved
-//   5           14             23 reserved (memcpy) 32
-//   6           15             24                   33
-//   7           16             25                   34
-//   8 main      17             26                   35
-//
-
+// Number of elements sent through core program rectangle
 param size: i16;
 
 param MEMCPYH2D_DATA_1_ID: i16;
@@ -37,23 +34,25 @@ param MEMCPYD2H_DATA_1_ID: i16;
 const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
 const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
 
-const main: u16 = 8;
 const C1: color = @get_color(9);
 
-const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = 1,
-    .height = 1,
-    .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
-    .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
-    });
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = 1,
+  .height = 1,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+});
 
 layout {
   @set_rectangle(1, 1);
 
   @set_tile_code(0, 0, "pe_program.csl", .{
+    .memcpy_params = memcpy.get_params(0),
     .size = size,
-    .main = main,
-    .C1 = C1,
-    .memcpy_params = memcpy.get_params(0)
+    .C1 = C1
   });
+
+  // fifo sends out the data via C1 --> tx = RAMP
+  // add16 receives data via C1 --> rx = RAMP
+  @set_color_config(0, 0, C1, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ RAMP }}});
 }

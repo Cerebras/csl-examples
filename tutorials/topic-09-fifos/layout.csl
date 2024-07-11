@@ -1,0 +1,73 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Color map/ WSE-2 task ID map
+// On WSE-2, data tasks are bound to colors (IDs 0 through 24)
+//
+//  ID var                      ID var  ID var                ID var
+//   0                           9      18                    27 reserved (memcpy)
+//   1                          10      19                    28 reserved (memcpy)
+//   2 loopback_color/_task_id  11      20                    29 reserved
+//   3                          12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4 MEMCPY_H2D_DATA_1        13      22 reserved (memcpy)  31 reserved
+//   5 MEMCPY_D2H_DATA_1        14      23 reserved (memcpy)  32
+//   6                          15      24                    33
+//   7                          16      25                    34
+//   8 main_task_id             17      26                    35
+
+// WSE-3 task ID map
+// On WSE-3, data tasks are bound to input queues (IDs 0 through 7)
+//
+//  ID var                      ID var  ID var                ID var
+//   0 reserved (memcpy)         9      18                    27 reserved (memcpy)
+//   1 reserved (memcpy)        10      19                    28 reserved (memcpy)
+//   2                          11      20                    29 reserved
+//   3                          12      21 reserved (memcpy)  30 reserved (memcpy)
+//   4 loopback_iq/_task_id     13      22 reserved (memcpy)  31 reserved
+//   5                          14      23 reserved (memcpy)  32
+//   6                          15      24                    33
+//   7                          16      25                    34
+//   8 main_task_id             17      26                    35
+
+// IDs for memcpy streaming colors
+param MEMCPYH2D_DATA_1_ID: i16;
+param MEMCPYD2H_DATA_1_ID: i16;
+
+// Nubmer of elements received from MEMCPY_H2D_1 into fifo
+param num_elems_to_process: i16;
+
+// Colors
+const MEMCPYH2D_DATA_1: color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYD2H_DATA_1: color = @get_color(MEMCPYD2H_DATA_1_ID);
+const loopback_color:   color = @get_color(2);
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = 1,
+  .height = 1,
+  .MEMCPYH2D_1 = MEMCPYH2D_DATA_1,
+  .MEMCPYD2H_1 = MEMCPYD2H_DATA_1
+});
+
+
+layout {
+  @set_rectangle(1,1);
+
+  @set_tile_code(0, 0, "buffer.csl", .{
+    .memcpy_params = memcpy.get_params(0),
+    .loopback_color = loopback_color,
+    .num_elems_to_process = num_elems_to_process
+  });
+
+  @set_color_config(0, 0, loopback_color, .{.routes = .{.rx = .{RAMP}, .tx = .{RAMP}}});
+}
