@@ -1,0 +1,129 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// kernel dimensions
+param x_dim: i16;
+param y_dim: i16;
+
+// Colors
+const east_color_0:  color = @get_color(0);
+const east_color_1:  color = @get_color(1);
+const west_color_0:  color = @get_color(2);
+const west_color_1:  color = @get_color(3);
+const south_color_0: color = @get_color(4);
+const south_color_1: color = @get_color(5);
+const north_color_0: color = @get_color(6);
+const north_color_1: color = @get_color(7);
+
+// This example uses x_dim x y_dim PEs
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = x_dim,
+  .height = y_dim
+});
+
+layout {
+  // PE coordinates are (column, row)
+  @set_rectangle(x_dim, y_dim);
+
+  const x_even_params = .{
+    .send_east_color = east_color_0, .send_west_color = west_color_1,
+    .recv_east_color = west_color_0, .recv_west_color = east_color_1,
+  };
+
+  const x_odd_params = .{
+    .send_east_color = east_color_1, .send_west_color = west_color_0,
+    .recv_east_color = west_color_1, .recv_west_color = east_color_0,
+  };
+
+  const y_even_params = .{
+    .send_south_color = south_color_0, .send_north_color = north_color_1,
+    .recv_south_color = north_color_0, .recv_north_color = south_color_1,
+  };
+
+  const y_odd_params = .{
+    .send_south_color = south_color_1, .send_north_color = north_color_0,
+    .recv_south_color = north_color_1, .recv_north_color = south_color_0,
+  };
+
+  for (@range(i16, x_dim)) |pe_x| {
+    const west_edge = (pe_x == 0);
+    const east_edge = (pe_x == x_dim-1);
+
+    const x_color_params = if (pe_x % 2 == 0) x_even_params else x_odd_params;
+
+    const x_params = @concat_structs(
+                       .{ .is_west_edge = west_edge, .is_east_edge = east_edge,
+                          .memcpy_params = memcpy.get_params(pe_x) },
+                       x_color_params
+                     );
+
+    for (@range(i16, y_dim)) |pe_y| {
+      const north_edge = (pe_y == 0);
+      const south_edge = (pe_y == y_dim-1);
+
+      const y_color_params = if (pe_y % 2 == 0) y_even_params else y_odd_params;
+
+      const y_params = @concat_structs(
+                         .{ .is_north_edge = north_edge, .is_south_edge = south_edge },
+                         y_color_params
+                       );
+
+      @set_tile_code(pe_x, pe_y, "pe_program.csl", @concat_structs(x_params, y_params));
+    }
+  }
+
+  // Create route values
+  const RX_R_TX_E = .{ .rx = .{ RAMP  }, .tx = .{ EAST  }};
+  const RX_W_TX_R = .{ .rx = .{ WEST  }, .tx = .{ RAMP  }};
+  const RX_R_TX_W = .{ .rx = .{ RAMP  }, .tx = .{ WEST  }};
+  const RX_E_TX_R = .{ .rx = .{ EAST  }, .tx = .{ RAMP  }};
+
+  const RX_R_TX_S = .{ .rx = .{ RAMP  }, .tx = .{ SOUTH }};
+  const RX_N_TX_R = .{ .rx = .{ NORTH }, .tx = .{ RAMP  }};
+  const RX_R_TX_N = .{ .rx = .{ RAMP  }, .tx = .{ NORTH }};
+  const RX_S_TX_R = .{ .rx = .{ SOUTH }, .tx = .{ RAMP  }};
+
+
+  for (@range(i16, x_dim)) |pe_x| {
+    for (@range(i16, y_dim)) |pe_y| {
+      if (pe_x % 2 == 0) {
+        @set_color_config(pe_x, pe_y, east_color_0, .{ .routes = RX_R_TX_E });
+        @set_color_config(pe_x, pe_y, east_color_1, .{ .routes = RX_W_TX_R });
+        @set_color_config(pe_x, pe_y, west_color_0, .{ .routes = RX_E_TX_R });
+        @set_color_config(pe_x, pe_y, west_color_1, .{ .routes = RX_R_TX_W });
+      } else {
+        @set_color_config(pe_x, pe_y, east_color_0, .{ .routes = RX_W_TX_R });
+        @set_color_config(pe_x, pe_y, east_color_1, .{ .routes = RX_R_TX_E });
+        @set_color_config(pe_x, pe_y, west_color_0, .{ .routes = RX_R_TX_W });
+        @set_color_config(pe_x, pe_y, west_color_1, .{ .routes = RX_E_TX_R });
+      }
+
+      if (pe_y % 2 == 0) {
+        @set_color_config(pe_x, pe_y, south_color_0, .{ .routes = RX_R_TX_S });
+        @set_color_config(pe_x, pe_y, south_color_1, .{ .routes = RX_N_TX_R });
+        @set_color_config(pe_x, pe_y, north_color_0, .{ .routes = RX_S_TX_R });
+        @set_color_config(pe_x, pe_y, north_color_1, .{ .routes = RX_R_TX_N });
+      } else {
+        @set_color_config(pe_x, pe_y, south_color_0, .{ .routes = RX_N_TX_R });
+        @set_color_config(pe_x, pe_y, south_color_1, .{ .routes = RX_R_TX_S });
+        @set_color_config(pe_x, pe_y, north_color_0, .{ .routes = RX_R_TX_N });
+        @set_color_config(pe_x, pe_y, north_color_1, .{ .routes = RX_S_TX_R });
+      }
+    }
+  }
+
+  // export symbol names
+  @export_name("states", [*]u32, true);
+  @export_name("generate", fn(u16)void);
+}

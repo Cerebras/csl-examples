@@ -70,6 +70,10 @@ def main():
   height = int(compile_data["params"]["height"])
   iters = int(compile_data["params"]["iters"])
 
+  print(f"nb = {nb}")
+  print(f"width = {width}")
+  print(f"height = {height}")
+  print(f"iters = {iters}")
 
   # Calculate alignment and padding to avoid bank conflicts
   align = 16

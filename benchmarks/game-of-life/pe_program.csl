@@ -1,0 +1,318 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param memcpy_params: comptime_struct;
+
+param is_east_edge:  bool;
+param is_west_edge:  bool;
+param is_south_edge: bool;
+param is_north_edge: bool;
+
+// Colors
+param send_east_color:  color;
+param send_west_color:  color;
+param send_south_color: color;
+param send_north_color: color;
+
+param recv_east_color:  color;
+param recv_west_color:  color;
+param recv_south_color: color;
+param recv_north_color: color;
+
+// Queue IDs
+const send_east_oq:  output_queue = @get_output_queue(2);
+const send_west_oq:  output_queue = @get_output_queue(3);
+const send_south_oq: output_queue = @get_output_queue(4);
+const send_north_oq: output_queue = @get_output_queue(5);
+
+const recv_east_iq:  input_queue  = @get_input_queue(2);
+const recv_west_iq:  input_queue  = @get_input_queue(3);
+const recv_south_iq: input_queue  = @get_input_queue(4);
+const recv_north_iq: input_queue  = @get_input_queue(5);
+
+// Task IDs
+const send_task_id:           local_task_id = @get_local_task_id(8);
+const sync_send_task_id:      local_task_id = @get_local_task_id(9);
+const sync_fwd_task_id:       local_task_id = @get_local_task_id(10);
+const start_next_gen_task_id: local_task_id = @get_local_task_id(11);
+const fwd_east_west_task_id:  local_task_id = @get_local_task_id(12);
+const exit_task_id:           local_task_id = @get_local_task_id(13);
+
+// On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
+const recv_east_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(recv_east_color)
+  else if (@is_arch("wse3")) @get_data_task_id(recv_east_iq);
+const recv_west_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(recv_west_color)
+  else if (@is_arch("wse3")) @get_data_task_id(recv_west_iq);
+const recv_south_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(recv_south_color)
+  else if (@is_arch("wse3")) @get_data_task_id(recv_south_iq);
+const recv_north_task_id: data_task_id =
+  if      (@is_arch("wse2")) @get_data_task_id(recv_north_color)
+  else if (@is_arch("wse3")) @get_data_task_id(recv_north_iq);
+
+
+// memcpy module provides infrastructure for copying data
+// and launching functions from the host
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const layout_mod = @import_module("<layout>");
+
+const MAX_GENERATIONS = 1000; // Max num total generations that can be stored
+
+// Number of neighboring PEs for this cell
+const num_neighbors: u16 = (if (is_west_edge)  0 else 1) + (if (is_east_edge)  0 else 1) // W, E
+                         + (if (is_north_edge) 0 else 1) + (if (is_south_edge) 0 else 1) // N, S
+                         + (if (is_north_edge or is_west_edge) 0 else 1)  // NW
+                         + (if (is_north_edge or is_east_edge) 0 else 1)  // NE
+                         + (if (is_south_edge or is_west_edge) 0 else 1)  // SW
+                         + (if (is_south_edge or is_east_edge) 0 else 1); // SE
+
+const num_west_nbrs: u16 = if (is_west_edge) 0
+                           else (1 + (if (is_north_edge) 0 else 1) + (if (is_south_edge) 0 else 1));
+const num_east_nbrs: u16 = if (is_east_edge) 0
+                           else (1 + (if (is_north_edge) 0 else 1) + (if (is_south_edge) 0 else 1));
+
+const num_ns_nbrs: u16 = (if (is_north_edge) 0 else 1) + (if (is_south_edge) 0 else 1);
+
+var iters: u16 = 0; // Number of generations for current run
+var current_iter: u16 = 0; // Track num generations completed so far
+
+// Store states of all cells for each generation
+var states: [MAX_GENERATIONS]u32;
+var states_ptr: [*]u32 = &states;
+var state_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> states[i] });
+
+// For current generation, track received states from neighbors
+var num_recv: u16 = 0;
+var current_sum: u32 = 0;
+
+var num_west_recv: u16 = 0;
+var num_east_recv: u16 = 0;
+var num_ns_recv: u16 = 0;
+
+// Store values received from N and S to forward E and W
+var fwd_vals: [2]u32;
+
+// DSDs for sending values to N, S, E, W neighbors
+const send_west_dsd = @get_dsd(fabout_dsd, .{
+  .fabric_color = send_west_color, .extent = 1, .output_queue = send_west_oq });
+const send_east_dsd = @get_dsd(fabout_dsd, .{
+  .fabric_color = send_east_color, .extent = 1, .output_queue = send_east_oq });
+const send_north_dsd = @get_dsd(fabout_dsd, .{
+  .fabric_color = send_north_color, .extent = 1, .output_queue = send_north_oq });
+const send_south_dsd = @get_dsd(fabout_dsd, .{
+  .fabric_color = send_south_color, .extent = 1, .output_queue = send_south_oq });
+
+// Send current state to all four neighbors
+task send() void {
+  if (!is_north_edge) @fmovs(send_north_dsd, state_dsd, .{ .async = true });
+  if (!is_south_edge) @fmovs(send_south_dsd, state_dsd, .{ .async = true });
+
+  // When sending to E and W finishes, allow sync_fwd task to proceed
+  // sync_fwd allows us to begin forwarding states received from N/ S to E/ W
+  if (!is_west_edge) @fmovs(send_west_dsd, state_dsd,
+                            .{ .async = true, .unblock = sync_fwd_task_id });
+  if (!is_east_edge) @fmovs(send_east_dsd, state_dsd,
+                            .{ .async = true, .activate = sync_fwd_task_id });
+
+  if (is_west_edge) @unblock(sync_fwd_task_id);
+  if (is_east_edge) @activate(sync_fwd_task_id);
+
+  // Do no send again until we forward N/ S recvs to E/ W neighbors
+  @block(send_task_id);
+}
+
+// Guarantee that we do not begin forwarding N/ S recvs to E/ W neighbors
+// until E/ W sends from our cell complete
+task sync_fwd() void {
+  @block(sync_fwd_task_id);
+  @unblock(fwd_east_west_task_id);
+}
+
+// Forward states received from N/ S neighbors to E/ W neighbors
+task fwd_east_west() void {
+  // fwd_vals[0] is N neighbor forwarded to E and W
+  // fwd_vals[1] is S neighbor forwarded to E and W
+  // if we are N edge, there is no N neighbor to forward, so we access only fwd_vals[1]
+  const offset = if (is_north_edge) 1 else 0;
+  const fwd_dsd = @get_dsd(mem1d_dsd,
+                           .{ .tensor_access = |i|{num_ns_nbrs} -> fwd_vals[i + offset] });
+
+  // When forwarding to E and W finishes, allow sync_send task to proceed
+  // sync_send allows us to begin sending next generation
+  if (!is_west_edge) @fmovs(send_west_dsd, fwd_dsd,
+                            .{ .async = true, .unblock = sync_send_task_id });
+  if (!is_east_edge) @fmovs(send_east_dsd, fwd_dsd,
+                            .{ .async = true, .activate = sync_send_task_id });
+
+  if (is_west_edge) @unblock(sync_send_task_id);
+  if (is_east_edge) @activate(sync_send_task_id);
+
+  // Do not forward again until we complete next generation E/ W sends
+  // from our cell to neighbors
+  @block(fwd_east_west_task_id);
+}
+
+// Guarantee that we do not begin sending next generation until we have forwarded
+// all neighbors from current generation
+task sync_send() void {
+  @block(sync_send_task_id);
+  @unblock(send_task_id);
+}
+
+// In each generation, PE will receive from W up to three times:
+// W neighbor, NW neighbor, and SW neighbor
+task recv_west(val: u32) void {
+  num_west_recv += 1;
+  num_recv += 1;
+  current_sum += val;
+
+  // If we have received from all W neighbors, block to prevent
+  // any activations until we begin next generation
+  if (num_west_recv == num_west_nbrs) @block(recv_west_task_id);
+  // If we have received from all neighbors, begin next generation
+  if (num_recv == num_neighbors) @activate(start_next_gen_task_id);
+}
+
+// In each generation, PE will receive from E up to three times
+// E neighbor, NE neighbor, and SE neighbor
+task recv_east(val: u32) void {
+  num_east_recv += 1;
+  num_recv += 1;
+  current_sum += val;
+
+  // If we have received from all E neighbors, block to prevent
+  // any activations until we begin next generation
+  if (num_east_recv == num_east_nbrs) @block(recv_east_task_id);
+  // If we have received from all neighbors, begin next generation
+  if (num_recv == num_neighbors) @activate(start_next_gen_task_id);
+}
+
+// In each generation, PE will receive from N if there is N neighbor
+task recv_north(val: u32) void {
+  num_ns_recv += 1;
+  num_recv += 1;
+  current_sum += val;
+
+  // Per generation, we only receive from N once. Block to prevent any
+  // activations until we begin next generation.
+  @block(recv_north_task_id);
+
+  // Store value received from N to forward to E and W neighbors
+  fwd_vals[0] = val;
+
+  // If we have received from N and S, fwd to E and W neighbors
+  if (num_ns_recv == num_ns_nbrs) @activate(fwd_east_west_task_id);
+  // If we have received from all neighbors, begin next generation
+  if (num_recv == num_neighbors) @activate(start_next_gen_task_id);
+}
+
+// In each generation, PE will receive from S if there is S neighbor
+task recv_south(val: u32) void {
+  num_ns_recv += 1;
+  num_recv += 1;
+  current_sum += val;
+
+  // Per generation, we only receive from S once. Block to prevent any
+  // activations until we begin next generation.
+  @block(recv_south_task_id);
+
+  // Store value received from S to forward to E and W neighbors
+  fwd_vals[1] = val;
+
+  // If we have received from N and S, fwd to E and W neighbors
+  if (num_ns_recv == num_ns_nbrs) @activate(fwd_east_west_task_id);
+  // If we have received from all neighbors, begin next generation
+  if (num_recv == num_neighbors) @activate(start_next_gen_task_id);
+}
+
+// Update current state and begin sending next generation to neighbors
+task start_next_gen() void {
+
+  current_iter += 1;
+  state_dsd = @increment_dsd_offset(state_dsd, 1, u32);
+
+  // Previous generation of cell is alive
+  if (states[current_iter-1] == 1) {
+    states[current_iter] = if (current_sum == 2 or current_sum == 3) 1 else 0;
+  // Previous generation of cell is dead
+  } else {
+    states[current_iter] = if (current_sum == 3) 1 else 0;
+  }
+
+  if (current_iter == iters - 1) {
+    @activate(exit_task_id);
+  } else {
+    current_sum = 0;
+    num_recv = 0;
+    num_west_recv = 0;
+    num_east_recv = 0;
+    num_ns_recv = 0;
+    @unblock(recv_west_task_id);
+    @unblock(recv_east_task_id);
+    @unblock(recv_north_task_id);
+    @unblock(recv_south_task_id);
+    @activate(send_task_id);
+  }
+}
+
+task exit() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+fn generate(num_gen: u16) void {
+  // Set number of generations for current run
+  iters = num_gen;
+  @assert(iters <= MAX_GENERATIONS);
+
+  // Begin sending to neighbors
+  @activate(send_task_id);
+}
+
+comptime {
+  @bind_local_task(send, send_task_id);
+  @bind_local_task(sync_send, sync_send_task_id);
+  @bind_local_task(sync_fwd, sync_fwd_task_id);
+  @bind_local_task(start_next_gen, start_next_gen_task_id);
+  @bind_local_task(fwd_east_west, fwd_east_west_task_id);
+  @bind_local_task(exit, exit_task_id);
+
+  @bind_data_task(recv_west,  recv_west_task_id);
+  @bind_data_task(recv_east,  recv_east_task_id);
+  @bind_data_task(recv_north, recv_north_task_id);
+  @bind_data_task(recv_south, recv_south_task_id);
+
+  @block(sync_send_task_id);
+  @block(sync_fwd_task_id);
+
+  // Will only become unbocked after first executoin of sync_fwd
+  @block(fwd_east_west_task_id);
+
+  // On WSE-3, we must explicitly initialize input and output queues
+  if (@is_arch("wse3")) {
+    @initialize_queue(send_west_oq,  .{ .color = send_west_color });
+    @initialize_queue(send_east_oq,  .{ .color = send_east_color });
+    @initialize_queue(send_north_oq, .{ .color = send_north_color });
+    @initialize_queue(send_south_oq, .{ .color = send_south_color });
+
+    @initialize_queue(recv_west_iq,  .{ .color = recv_west_color });
+    @initialize_queue(recv_east_iq,  .{ .color = recv_east_color });
+    @initialize_queue(recv_north_iq, .{ .color = recv_north_color });
+    @initialize_queue(recv_south_iq, .{ .color = recv_south_color });
+  }
+
+  @export_symbol(states_ptr, "states");
+  @export_symbol(generate);
+}

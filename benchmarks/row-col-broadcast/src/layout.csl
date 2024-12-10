@@ -1,0 +1,95 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// c0,c1,c2,c3,c4 are internal colors of sync module
+param C0_ID: i16;
+param C1_ID: i16;
+param C2_ID: i16;
+param C3_ID: i16;
+param C4_ID: i16;
+
+param pe_length: i16; // number of wavelets per PE
+param width : i16 ;   // width of the core
+param height: i16 ;   // height of the core
+
+
+const C0 : color = @get_color(C0_ID);
+const C1 : color = @get_color(C1_ID);
+const C2 : color = @get_color(C2_ID);
+const C3 : color = @get_color(C3_ID);
+const C4 : color = @get_color(C4_ID);
+
+// entrypoints of sync module
+const STARTUP: local_task_id = @get_local_task_id(15);
+const SYNC_Y: local_task_id = @get_local_task_id(16);
+const SYNC_BCAST: local_task_id = @get_local_task_id(17);
+const EXIT: local_task_id = @get_local_task_id(18);
+
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = width,
+    .height = height,
+    });
+
+const sync = @import_module( "sync/layout.csl", .{
+    .colors = [5]color{C0, C1, C2, C3, C4},
+    .entrypoints = [4]local_task_id{STARTUP, SYNC_Y, SYNC_BCAST, EXIT},
+    .width = width,
+    .height = height
+    });
+
+layout{
+
+    // H2D or D2H colors must be less than 15 (smallest color of entrypoints)
+    @comptime_assert( C0_ID < C1_ID);
+    @comptime_assert( C1_ID < C2_ID);
+    @comptime_assert( C2_ID < C3_ID);
+    @comptime_assert( C3_ID < C4_ID);
+
+    // step 1: configure the rectangle which does not include halo
+    @set_rectangle( width, height );
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    var py: i16 = 0;
+    while(py < height) : (py +=1) {
+        var px: i16 = 0;
+        while( px < width) : (px +=1) {
+
+            const memcpyParams = memcpy.get_params(px);
+            const syncParams = sync.get_params(px, py);
+
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .pe_length = pe_length,
+
+                .syncParams = syncParams,
+            };
+
+            @set_tile_code(px, py, "kernel.csl", params);
+        }
+    }
+
+    @export_name("A", [*]f32, true);
+    @export_name("time_memcpy", [*]f32, true);
+    @export_name("time_ref", [*]f32, true);
+
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+    @export_name("f_sync", fn()void);
+    @export_name("f_reference_timestamps", fn()void);
+} // end of layout

@@ -8,15 +8,21 @@ performing operations on entire tensors.
 This program creates three one-dimensional memory DSDs for accessing ``A``,
 ``b``, and ``y``, each of which specifies how to loop over the respective
 arrays.
-The ``tensor_access`` field specifies an induction variable, a loop bound,
-and an affine expression (i.e., a linear function plus a constant) to generate
-various addresses at runtime.
 
 ``b_dsd`` and ``y_dsd`` access the ``M`` contiguous elements of ``b`` and ``y``,
 respectively.
 ``A_dsd`` accesses ``M`` elements of ``A``, but strided by ``N`` elements.
 Because ``A`` is stored in row major format, this means that ``A_dsd``
 initially accesses the 0th column of ``A``.
+
+We demonstrate here two ways of defining DSDs. For ``y_dsd``, we specify the
+base memory address (``&y``) and the number of elements accessed (``M``).
+For ``A_dsd`` and ``b_dsd``, we demonstrate the use of a ``tensor_access``
+expression.
+The ``tensor_access`` field specifies an induction variable, a loop bound,
+and an affine expression (i.e., a linear function plus a constant) to generate
+various addresses at runtime.
+
 
 These DSDs are used by the DSD operations ``@fmacs`` and ``@fadds`` to
 compute ``Ax + b`` and store it in ``y``.

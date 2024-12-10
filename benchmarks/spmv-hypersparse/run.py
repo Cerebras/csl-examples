@@ -617,7 +617,7 @@ def main():
     print('store ELFs and log files in the folder ', dirname)
 
     # layout of a rectangle
-    code_csl = "layout.csl"
+    code_csl = "src/layout.csl"
 
     ## calculate the output vector padding info
     out_vec_len_per_pe_row = math.ceil(nrows / np_rows)
@@ -655,121 +655,121 @@ def main():
         print("COMPILE ONLY: EXIT")
         return
 
-    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+    runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
-    sym_mat_vals_buf = simulator.get_id("mat_vals_buf")
-    sym_x_tx_buf = simulator.get_id("x_tx_buf");
-    sym_y_local_buf = simulator.get_id("y_local_buf");
+    sym_mat_vals_buf = runner.get_id("mat_vals_buf")
+    sym_x_tx_buf = runner.get_id("x_tx_buf");
+    sym_y_local_buf = runner.get_id("y_local_buf");
 
-    sym_mat_rows_buf = simulator.get_id("mat_rows_buf")
-    sym_mat_col_idx_buf = simulator.get_id("mat_col_idx_buf")
-    sym_mat_col_loc_buf = simulator.get_id("mat_col_loc_buf")
-    sym_mat_col_len_buf = simulator.get_id("mat_col_len_buf")
-    sym_y_rows_init_buf = simulator.get_id("y_rows_init_buf")
-    sym_local_nnz = simulator.get_id("local_nnz")
-    sym_local_nnz_cols = simulator.get_id("local_nnz_cols")
-    sym_local_nnz_rows = simulator.get_id("local_nnz_rows")
-    sym_time_buf_u16 = simulator.get_id("time_buf_u16")
-    sym_time_ref_u16 = simulator.get_id("time_ref_u16")
+    sym_mat_rows_buf = runner.get_id("mat_rows_buf")
+    sym_mat_col_idx_buf = runner.get_id("mat_col_idx_buf")
+    sym_mat_col_loc_buf = runner.get_id("mat_col_loc_buf")
+    sym_mat_col_len_buf = runner.get_id("mat_col_len_buf")
+    sym_y_rows_init_buf = runner.get_id("y_rows_init_buf")
+    sym_local_nnz = runner.get_id("local_nnz")
+    sym_local_nnz_cols = runner.get_id("local_nnz_cols")
+    sym_local_nnz_rows = runner.get_id("local_nnz_rows")
+    sym_time_buf_u16 = runner.get_id("time_buf_u16")
+    sym_time_ref_u16 = runner.get_id("time_ref_u16")
 
     start = time.time()
-    simulator.load()
+    runner.load()
     end = time.time()
     print(f"*** Load done in {end-start}s")
 
     start = time.time()
-    simulator.run()
+    runner.run()
 
     print("step 1: enable tsc counter to sample the clock")
-    simulator.launch("f_enable_tsc", nonblock=True)
+    runner.launch("f_enable_tsc", nonblock=True)
 
     print("step 2: copy the structure of A and vector x to the device")
     # 1. mat_vals_buf[max_local_nnz], type = f32
     mat_vals_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz, mat_vals_buf, np.float32)
-    simulator.memcpy_h2d(sym_mat_vals_buf, mat_vals_buf_1d, 0, 0, width, height, max_local_nnz,\
+    runner.memcpy_h2d(sym_mat_vals_buf, mat_vals_buf_1d, 0, 0, width, height, max_local_nnz,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 2: x_tx_buf[local_vec_sz], type = f32
     x_tx_buf_1d = hwl_to_oned_colmajor(height, width, local_vec_sz, x_tx_buf, np.float32)
-    simulator.memcpy_h2d(sym_x_tx_buf, x_tx_buf_1d, 0, 0, width, height, local_vec_sz,\
+    runner.memcpy_h2d(sym_x_tx_buf, x_tx_buf_1d, 0, 0, width, height, local_vec_sz,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 3: mat_rows_buf[max_local_nnz], type = u16
     mat_rows_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz, mat_rows_buf, np.uint32)
-    simulator.memcpy_h2d(sym_mat_rows_buf, mat_rows_buf_1d, 0, 0, width, height, max_local_nnz,\
+    runner.memcpy_h2d(sym_mat_rows_buf, mat_rows_buf_1d, 0, 0, width, height, max_local_nnz,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 4: mat_col_idx_buf[max_local_nnz_cols], type = u16
     mat_col_idx_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz_cols, mat_col_idx_buf, np.uint32)
-    simulator.memcpy_h2d(sym_mat_col_idx_buf, mat_col_idx_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
+    runner.memcpy_h2d(sym_mat_col_idx_buf, mat_col_idx_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 5: mat_col_loc_buf[max_local_nnz_cols], type = u16
     mat_col_loc_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz_cols, mat_col_loc_buf, np.uint32)
-    simulator.memcpy_h2d(sym_mat_col_loc_buf, mat_col_loc_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
+    runner.memcpy_h2d(sym_mat_col_loc_buf, mat_col_loc_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 6: mat_col_len_buf[max_local_nnz_cols], type = u16
     mat_col_len_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz_cols, mat_col_len_buf, np.uint32)
-    simulator.memcpy_h2d(sym_mat_col_len_buf, mat_col_len_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
+    runner.memcpy_h2d(sym_mat_col_len_buf, mat_col_len_buf_1d, 0, 0, width, height, max_local_nnz_cols,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 7: y_rows_init_buf[max_local_nnz_rows], type = u16
     y_rows_init_buf_1d = hwl_to_oned_colmajor(height, width, max_local_nnz_rows, y_rows_init_buf, np.uint32)
-    simulator.memcpy_h2d(sym_y_rows_init_buf, y_rows_init_buf_1d, 0, 0, width, height, max_local_nnz_rows,\
+    runner.memcpy_h2d(sym_y_rows_init_buf, y_rows_init_buf_1d, 0, 0, width, height, max_local_nnz_rows,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 8: local_nnz, type = u16
     local_nnz_1d = hwl_to_oned_colmajor(height, width, 1, local_nnz, np.uint32)
-    simulator.memcpy_h2d(sym_local_nnz, local_nnz_1d, 0, 0, width, height, 1,\
+    runner.memcpy_h2d(sym_local_nnz, local_nnz_1d, 0, 0, width, height, 1,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 9: local_nnz_cols, type = u16
     local_nnz_cols_1d = hwl_to_oned_colmajor(height, width, 1, local_nnz_cols, np.uint32)
-    simulator.memcpy_h2d(sym_local_nnz_cols, local_nnz_cols_1d, 0, 0, width, height, 1,\
+    runner.memcpy_h2d(sym_local_nnz_cols, local_nnz_cols_1d, 0, 0, width, height, 1,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     # 10: local_nnz_rows, type = u16
     local_nnz_rows_1d = hwl_to_oned_colmajor(height, width, 1, local_nnz_rows, np.uint32)
-    simulator.memcpy_h2d(sym_local_nnz_rows, local_nnz_rows_1d, 0, 0, width, height, 1,\
+    runner.memcpy_h2d(sym_local_nnz_rows, local_nnz_rows_1d, 0, 0, width, height, 1,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     print("step 3: sync all PEs to sample the reference clock")
-    simulator.launch("f_sync", np.int16(1), nonblock=False)
+    runner.launch("f_sync", np.int16(1), nonblock=False)
 
     print("step 4: tic() records time_start")
-    simulator.launch("f_tic", nonblock=True)
+    runner.launch("f_tic", nonblock=True)
 
     print("step 5: spmv")
-    simulator.launch("f_spmv", nonblock=False)
+    runner.launch("f_spmv", nonblock=False)
 
     print("step 5: toc() records time_end")
-    simulator.launch("f_toc", nonblock=False)
+    runner.launch("f_toc", nonblock=False)
 
     print("step 6: prepare (time_start, time_end)")
-    simulator.launch("f_memcpy_timestamps", nonblock=False)
+    runner.launch("f_memcpy_timestamps", nonblock=False)
 
     print("step 7: fetch the timing time_buf_u16[6] = (time_start, time_end), type = u16")
     time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
-    simulator.memcpy_d2h(time_memcpy_hwl_1d, sym_time_buf_u16, 0, 0, width, height, 6,\
+    runner.memcpy_d2h(time_memcpy_hwl_1d, sym_time_buf_u16, 0, 0, width, height, 6,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
     time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
 
     print("step 8: fetch the output vector y of type f32")
     y_1d = np.zeros(height*width*local_out_vec_sz, np.float32)
-    simulator.memcpy_d2h(y_1d, sym_y_local_buf, 0, 0, width, height, local_out_vec_sz,\
+    runner.memcpy_d2h(y_1d, sym_y_local_buf, 0, 0, width, height, local_out_vec_sz,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 
     print("step 9: prepare reference clock")
-    simulator.launch("f_reference_timestamps", nonblock=False)
+    runner.launch("f_reference_timestamps", nonblock=False)
 
     print("step 10: D2H reference clock")
     time_ref_1d = np.zeros(height*width*3, np.uint32)
-    simulator.memcpy_d2h(time_ref_1d, sym_time_ref_u16, 0, 0, width, height, 3,\
+    runner.memcpy_d2h(time_ref_1d, sym_time_ref_u16, 0, 0, width, height, 3,\
         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
     time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
 
-    simulator.stop()
+    runner.stop()
 
     end = time.time()
     print(f"*** Run done in {end-start}s")
@@ -783,7 +783,7 @@ def main():
     # remove padding of y_wse because y_ref has no padding
     verify_result(y_ref, y_wse[0:nrows])
 
-    if args.cmaddr is None:
+    if args.simulator:
         # move simulation log and core dump to the given folder
         dst_log = Path(f"{dirname}/sim.log")
         src_log = Path("sim.log")
@@ -798,7 +798,7 @@ def main():
             shutil.move(src_trace, dst_trace)
 
     # dump the device memory via debug tool
-    if 0:
+    if args.simulator:
         print(f"time_ref_hwl = \n{time_ref_hwl}")
         debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
         for py in range(height):

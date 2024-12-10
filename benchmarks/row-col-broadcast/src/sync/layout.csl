@@ -1,0 +1,79 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param colors:[5]color;
+param entrypoints:[4]local_task_id;
+param width : i16 ;   // width of the core
+param height: i16 ;   // height of the core
+
+const C0 : color = colors[0];
+const C1 : color = colors[1];
+const C2 : color = colors[2];
+const C3 : color = colors[3];
+const C4 : color = colors[4];
+
+const STARTUP: local_task_id = entrypoints[0];
+const SYNC_Y: local_task_id = entrypoints[1];
+const SYNC_BCAST: local_task_id = entrypoints[2];
+const EXIT: local_task_id = entrypoints[3];
+
+fn get_params(px:i16, py:i16) comptime_struct {
+
+    var first_py: bool = (0 == py);
+    var last_py: bool = ((height-1) == py);
+    var is_py_even: bool = (0 == (py % 2));
+
+    var first_px: bool = (0 == px);
+    var last_px: bool = ((width-1) == px);
+    var is_px_even: bool = (0 == (px % 2));
+
+    var c_recv_px: color = C0;
+    var c_send_px: color = C1;
+    if (is_px_even){
+        c_recv_px = C0;
+        c_send_px = C1;
+    }else{
+        c_recv_px = C1;
+        c_send_px = C0;
+    }
+
+    var c_recv_py: color = C2;
+    var c_send_py: color = C3;
+    if (is_py_even){
+        c_recv_py = C2;
+        c_send_py = C3;
+    }else{
+        c_recv_py = C3;
+        c_send_py = C2;
+    }
+
+    return .{
+        .c_recv_px = c_recv_px,
+        .c_send_px = c_send_px,
+        .c_recv_py = c_recv_py,
+        .c_send_py = c_send_py,
+        .c_bcast = C4,
+
+        .STARTUP = STARTUP,
+        .SYNC_Y = SYNC_Y,
+        .SYNC_BCAST = SYNC_BCAST,
+        .EXIT = EXIT,
+
+        .first_px = first_px,
+        .last_px = last_px,
+        .first_py = first_py,
+        .last_py = last_py,
+    };
+}

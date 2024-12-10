@@ -1,4 +1,4 @@
-spmv-hypersparse
+Hypersparse SpMV
 ================
 
 This example evaluates the performance of sparse matrix-vector multiplication.

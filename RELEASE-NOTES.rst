@@ -4,6 +4,19 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 1.3.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 1.3.0.
+
+- A new example program ``row-col-broadcast`` has been introduced which
+  benchmarks the bandwidth of data transfers between host and device,
+  where data is broadcast across a row or column of PEs,
+  using the new ``memcpy_h2d_colbcast`` and ``memcpy_h2d_rowbcast`` APIs.
+
+- A new example program ``game-of-life`` has been introduced which implements
+  Conway's Game of Life, where each PE is treated as a single cell.
+
 Version 1.2.0
 -------------
 
