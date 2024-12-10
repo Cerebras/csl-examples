@@ -74,8 +74,8 @@ var y: [M_per_PE]f32;
 
 // DSDs for accessing A, x, y
 // A_dsd accesses column of A
-var A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_per_PE} -> A[i] });
-var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_per_PE} -> y[i] });
+var A_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &A, .extent = M_per_PE });
+var y_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &y, .extent = M_per_PE });
 
 // ptr to A will be advertised as symbol to host
 var A_ptr: [*]f32 = &A;

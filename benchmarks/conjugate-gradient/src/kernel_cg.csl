@@ -1,0 +1,406 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+param memcpyParams: comptime_struct;
+
+param reduceParams: comptime_struct;
+
+param stencilParams: comptime_struct;
+
+param MAX_ZDIM: i16; // size of vector x
+
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+
+param STATE: local_task_id;
+
+const timestamp = @import_module("<time>");
+
+const math_lib = @import_module("<math>");
+
+const blas_lib = @import_module("blas.csl");
+
+// memcpy module reserves
+// - input/output queue 0 and 1
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+
+// allreduce uses input queue/output queue 1
+const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
+     .f_callback = f_trigger_state_machine,
+     .queues = [1]u16{2},
+     .dest_dsr_ids = [1]u16{1},
+     .src0_dsr_ids = [1]u16{1},
+     .src1_dsr_ids = [1]u16{1}
+     }));
+
+// output queue cannot overlap input queues
+const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+     .f_callback = f_trigger_state_machine,
+     .input_queues = [4]u16{4, 5, 6, 7},
+     .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
+     .output_ut_id = 3,
+     .BLOCK_SIZE = BLOCK_SIZE,
+     .dest_dsr_ids = [2]u16{2,3},
+     .src0_dsr_ids = [1]u16{2},
+     .src1_dsr_ids = [2]u16{2,3}
+     }));
+
+
+// tsc_size_words = 3
+// starting time of H2D/D2H
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+// ending time of H2D/D2H
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+var b = @zeros([MAX_ZDIM]f32); // right-hand-side
+var x = @zeros([MAX_ZDIM]f32); // approximated solution
+var p = @zeros([MAX_ZDIM]f32); // Krylov space
+var w = @zeros([MAX_ZDIM]f32); // w = A * p
+var r = @zeros([MAX_ZDIM]f32); // residual
+
+var dot = @zeros([1]f32); // dummy variable for f_sync
+var rho = @zeros([1]f32);
+var rho_old = @zeros([1]f32);
+var eta = @zeros([1]f32);
+var beta: f32 = @as(f32,0);
+
+// stencil coefficients are organized as
+// {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+//
+// The formula is
+//    c_west * x[i-1][j][k] + c_east * x[i+1][j][k] +
+//    c_south * x[i][j-1][k] + c_north * x[i][j+1][k] +
+//    c_bottom * x[i][j][k-1] + c_top * x[i][j][k+1] +
+//    c_center * x[i][j][k]
+var stencil_coeff = @zeros([7]f32);
+
+// time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
+var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
+
+// reference clock inside allreduce module
+var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+
+var ptr_b: [*]f32 = &b;
+var ptr_x: [*]f32 = &x;
+var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
+var ptr_time_ref: [*]u16 = &time_ref_u16;
+var ptr_rho: [*]f32 = &rho;
+
+// size of local tensor during the CG
+var n: i16 = 0;
+var tol: f32 = @as(f32, 0);
+var max_ite: i16 = 0;
+
+var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b[i] });
+var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
+var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
+var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w[i] });
+
+const STATE_SYNC: i16 = 0;
+const STATE_INIT: i16 = 1;
+const STATE_SPMV_AX: i16 = 2;
+const STATE_RESIDUAL: i16 = 3;
+const STATE_CONV_CHECK: i16 = 4;
+const STATE_UPDATE_P: i16 = 6;
+const STATE_SPMV_AP: i16 = 7;
+const STATE_ETA: i16 = 8;
+const STATE_UPDATE_X_R_RHO: i16 = 9;
+const STATE_EXIT: i16 = 10;
+
+var k: i16 = 0;
+var cur_state: i16 = 0;
+var next_state: i16 = 0;
+
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+    timestamp.get_timestamp(&tscEndBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_memcpy_timestamps() void {
+
+    time_buf_u16[0] = tscStartBuffer[0];
+    time_buf_u16[1] = tscStartBuffer[1];
+    time_buf_u16[2] = tscStartBuffer[2];
+
+    time_buf_u16[3] = tscEndBuffer[0];
+    time_buf_u16[4] = tscEndBuffer[1];
+    time_buf_u16[5] = tscEndBuffer[2];
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+
+fn f_sync() void {
+    cur_state = STATE_SYNC;
+    @activate(STATE);
+}
+
+fn f_cg(size:i16, tol_val:f32, max_ite_val: i16) void {
+    n = size;
+    tol = tol_val;
+    max_ite = max_ite_val;
+
+    cur_state = STATE_INIT;
+    @activate(STATE);
+}
+
+
+// initialization of CG
+// - setup the length of all DSDs
+//
+fn f_cg_init() void {
+
+    // set the length of all DSDs
+    mem_b_dsd = @set_dsd_length(mem_b_dsd, @bitcast(u16,n));
+    mem_x_dsd = @set_dsd_length(mem_x_dsd, @bitcast(u16,n));
+    mem_p_dsd = @set_dsd_length(mem_p_dsd, @bitcast(u16,n));
+    mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
+    mem_w_dsd = @set_dsd_length(mem_w_dsd, @bitcast(u16,n));
+
+    // must go back to state machine
+    f_trigger_state_machine();
+}
+
+// w = A*x
+fn f_spmv_Ax() void {
+    stencil_mod.spmv(n, &stencil_coeff, &x, &w);
+}
+
+// compute r = b - w and rho = |r|^2
+// where w = A*x is computed by f_spmv_Ax
+fn f_residual() void {
+
+    @fsubs(mem_r_dsd, mem_b_dsd, mem_w_dsd);
+
+    // compute <r, r> locally
+    rho[0] = blas_lib.dot(n, &r, &r);
+
+    // reduce(|r|^2)
+    reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
+}
+
+// if k is 1
+//   p = r0
+// else
+//   beta = rho/rho_old
+//   p = r + beta*p
+// end
+fn f_update_p() void {
+    if (1 == k){
+        // p = r
+        @fmovs(mem_p_dsd, mem_r_dsd);
+    }else{
+        // beta_{k} = |r_{k-1}|^2/|r_{k-2}|^2
+        beta = rho[0]/rho_old[0];
+        // p_{k} = r_{k-1} + beta_{k} * p_{k-1}
+        @fmacs(mem_p_dsd, mem_r_dsd, mem_p_dsd, beta);
+    }
+
+    // must go back to state machine
+    f_trigger_state_machine();
+}
+
+// w = A*p
+fn f_spmv_Ap() void {
+    stencil_mod.spmv(n, &stencil_coeff, &p, &w);
+}
+
+// eta = np.dot(p,w)
+fn f_eta() void {
+    // compute <w, p> locally
+    eta[0] = blas_lib.dot(n, &w, &p);
+    // reduce(<w,p>)
+    reduce_mod.allreduce(1, &eta, reduce_mod.TYPE_BINARY_OP.ADD);
+}
+
+// update x, r and rho
+// ---
+// alpha = rho/eta
+// x = x + alpha * p
+// r = r - alpha * w where w = A*p
+// rho_old = rho
+// rho = np.dot(r,r)
+// ---
+//
+// w must be computed by f_spmv_Ap()
+// eta must be computed by f_eta()
+//
+fn f_update_x_r_rho() void {
+
+    var alpha: f32 = rho[0]/eta[0];
+    var alpha_minus: f32 = -alpha;
+
+    // x_{k} = x_{k-1} + alpha_{k} * p_{k}
+    // x = x + alpha * p
+    @fmacs(mem_x_dsd, mem_x_dsd, mem_p_dsd, alpha);
+
+    // r_{k} = r_{k-1} - alpha_{k} * A*p_{k}
+    // r = r - alpha * w
+    @fmacs(mem_r_dsd, mem_r_dsd, mem_w_dsd, alpha_minus);
+
+    // update rho
+    rho_old[0] = rho[0];
+
+    // rho = np.dot(r,r)
+    // compute <r, r> locally
+    rho[0] = blas_lib.dot(n, &r, &r);
+    // reduce(|r|^2)
+    reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
+}
+
+
+fn f_trigger_state_machine() void {
+    cur_state = next_state; // go to next state
+    @activate(STATE);
+}
+
+// state machine of CG
+// it contains two operations
+// - sync operation of allreduce
+// - CG algorithm
+//
+// The callback f_trigger_state_machine is provided for the
+// allreduce module and stencil module.
+//
+// The state transition of sync is
+// SYNC --> EXIT
+//
+// The state transition of PCG algorithm is
+// INIT --> SPMV_AX --> RESIDUAL --> CONV_CHECK --> EXIT OR UPDATE_Z
+// --> UPDATE_P --> SPMV_AP --> ETA --> UPDATE_X_R_RHO --> CONV_CEHCK
+//
+task f_state() void {
+
+    if (STATE_SYNC == cur_state){
+        // sync all PEs by internal allreduce module
+        next_state = STATE_EXIT;
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+
+    }else if (STATE_INIT == cur_state){
+        next_state = STATE_SPMV_AX;
+        f_cg_init();
+
+    }else if (STATE_SPMV_AX == cur_state){
+        next_state = STATE_RESIDUAL;
+        k = 0;
+        // w = A*x0
+        f_spmv_Ax();
+
+    }else if (STATE_RESIDUAL == cur_state){
+        next_state = STATE_CONV_CHECK;
+        // r0 = b - w = b - A*x0
+        // rho = |r0|^2
+        f_residual();
+
+    }else if (STATE_CONV_CHECK == cur_state){
+        // if |r_k|_2 < tol, then exit
+        if ((rho[0] > tol*tol) and (k < max_ite)){
+            next_state = STATE_UPDATE_P;
+        }else{
+            next_state = STATE_EXIT;
+        }
+        f_trigger_state_machine();
+
+    }else if (STATE_UPDATE_P == cur_state){
+        next_state = STATE_SPMV_AP;
+        k = k + 1;
+        // if k == 1
+        //   p = z
+        // else
+        //   beta = rho/rho_old
+        //   p = z + beta * p
+        f_update_p();
+
+    }else if (STATE_SPMV_AP == cur_state){
+        next_state = STATE_ETA;
+        // w = A*p
+        f_spmv_Ap();
+
+    }else if (STATE_ETA == cur_state){
+        next_state = STATE_UPDATE_X_R_RHO;
+        // eta = np.dot(p,w) = (p_{k}, A*p_{k})
+        f_eta();
+
+    }else if (STATE_UPDATE_X_R_RHO == cur_state){
+        next_state = STATE_CONV_CHECK;
+        // alpha = rho/eta
+        // x = x + alpha * p
+        // r = r - alpha * w  where w = A*p
+        // rho_old = rho
+        // rho = np.dot(r,r)
+        f_update_x_r_rho();
+
+    }else if (STATE_EXIT == cur_state){
+        sys_mod.unblock_cmd_stream();
+    }else{
+        @assert(false); // Error: unknown state
+        // assert() is ignored by HW, it could hang here
+        // To avoid a stall, trigger callback (the caveat is the wrong result)
+        sys_mod.unblock_cmd_stream();
+    }
+}
+
+
+fn f_reference_timestamps() void {
+    
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @bind_local_task( f_state, STATE);
+}
+
+comptime {
+    @export_symbol(ptr_b, "b");
+    @export_symbol(ptr_x, "x");
+    @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_time_buf_u16, "time_buf_u16");
+    @export_symbol(ptr_time_ref, "time_ref");
+    @export_symbol(ptr_rho, "rho");
+}
+
+comptime{
+    @export_symbol(f_enable_timer);
+    @export_symbol(f_tic);
+    @export_symbol(f_toc);
+    @export_symbol(f_memcpy_timestamps);
+
+    @export_symbol(f_cg);
+
+    @export_symbol(f_sync);
+    @export_symbol(f_reference_timestamps);
+}

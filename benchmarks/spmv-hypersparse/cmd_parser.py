@@ -25,6 +25,8 @@ def parse_args():
         help='the sparse matrix in MTX format',
         required=True
     )
+    parser.add_argument("--simulator", action="store_true",
+        help="Runs on simulator")
     parser.add_argument(
         '--num_pe_cols',
         type=int,
@@ -78,7 +80,7 @@ def parse_args():
     )
     parser.add_argument(
         "--arch",
-        help="wse1 or wse2. Default is wse1 when not supplied."
+        help="wse2 or wse3. Default is wse2 when not supplied."
     )
     parser.add_argument(
         '--is_invec_one',
@@ -99,5 +101,8 @@ def parse_args():
     )
 
     args = parser.parse_args()
+
+    if args.cmaddr is None:
+        args.simulator = False
 
     return args

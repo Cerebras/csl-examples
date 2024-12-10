@@ -32,8 +32,8 @@ var y = @zeros([M]f32); // Initialize y to zero
 // DSDs for accessing A, b, y
 // A_dsd accesses column of A
 var A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i*N] });
-var b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> b[i] });
-var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> y[i] });
+var b_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &b, .extent = M });
+var y_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &y, .extent = M });
 
 // ptrs to A, x, b, y will be advertised as symbols to host
 var A_ptr: [*]f32 = &A;
