@@ -1,4 +1,4 @@
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,64 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import struct
-import time
 import argparse
-import math
 import csv
 import json
+import math
+import struct
+import time
+
 import numpy as np
 
-from cerebras.sdk.client import (
-        SdkCompiler,
-        SdkRuntime,
-)
-
-from cerebras.appliance.pb.sdk.sdk_common_pb2 import (
-        MemcpyDataType,
-        MemcpyOrder,
-)
+from cerebras.appliance.pb.sdk.sdk_common_pb2 import MemcpyDataType, MemcpyOrder # pylint: disable=import-error,no-name-in-module
+from cerebras.sdk.client import SdkRuntime # pylint: disable=import-error,no-name-in-module
 
 hash_filename = "hash.json"
 
 
 def parse_args():
-  """ parse the command line """
+  """parse the command line"""
 
   parser = argparse.ArgumentParser(description="single tile matvec run parameters")
-  parser.add_argument("--name", required=False, default="out",
-                      help="prefix of ELF files")
-  parser.add_argument("--simulator", action="store_true",
-                      help="Runs on simulator")
-  parser.add_argument("--verify", action="store_true",
-                      help="Verify Y computation")
-  # The following parameters are 
-  parser.add_argument(
-      "--nb",
-      default=1, type=int,
-      help="tile_size")
-  parser.add_argument(
-      "--width",
-      default=1, type=int,
-      help="width of the core rectangle")
-  parser.add_argument(
-      "--height",
-      default=1, type=int,
-      help="height of the core rectangle")
-  parser.add_argument(
-      "--iters",
-      default=1, type=int,
-      help="number of iterations")
+  parser.add_argument("--name", required=False, default="out", help="prefix of ELF files")
+  parser.add_argument("--simulator", action="store_true", help="Runs on simulator")
+  parser.add_argument("--verify", action="store_true", help="Verify Y computation")
+  # The following parameters should match the compile artifacts
+  parser.add_argument("--nb", default=1, type=int, help="tile_size")
+  parser.add_argument("--width", default=1, type=int, help="width of the core rectangle")
+  parser.add_argument("--height", default=1, type=int, help="height of the core rectangle")
+  parser.add_argument("--iters", default=1, type=int, help="number of iterations")
 
   args = parser.parse_args()
   return args
 
 
 def float_to_hex(f):
-  return hex(struct.unpack('<I', struct.pack('<f', f))[0])
+  return hex(struct.unpack("<I", struct.pack("<f", f))[0])
+
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
+
 
 def sub_ts(words):
   return make_u48(words[3:]) - make_u48(words[0:3])
@@ -89,22 +70,10 @@ def main():
   name = args.name
   verify = args.verify
 
-  # FileNotFoundError: [Errno 2] No such file or directory: '8da5208c2594b1ed64fe066bcb8b03b475a6888b21a2c4b3091c5637802f0c85/latest/out.json'
-  # We need to RPCed whole tarball of {hashtr} back to the client
-  if False:
-    # Parse the compile metadata
-    with open(f"{hashstr}/out.json", encoding="utf-8") as json_file:
-      compile_data = json.load(json_file)
-
-    nb = int(compile_data["params"]["tile_size"])
-    width = int(compile_data["params"]["width"])
-    height = int(compile_data["params"]["height"])
-    iters = int(compile_data["params"]["iters"])
-  else:
-    nb = args.nb
-    width = args.width
-    height = args.height
-    iters = args.iters
+  nb = args.nb
+  width = args.width
+  height = args.height
+  iters = args.iters
 
   print(f"nb = {nb}")
   print(f"width = {width}")
@@ -113,16 +82,15 @@ def main():
 
   # Calculate alignment and padding to avoid bank conflicts
   align = 16
-  multiple = int(align/4)
-  padded_nb = math.ceil(nb/multiple)*multiple
-
+  multiple = int(align / 4)
+  padded_nb = math.ceil(nb / multiple) * multiple
 
   #############
   # Run
   #############
 
   print(f"load artifact name from file {hash_filename}")
-  with open(hash_filename, "r") as f:
+  with open(hash_filename, "r", encoding="utf-8") as f:
     hashstr = json.load(f)
 
   start = time.time()
@@ -137,65 +105,107 @@ def main():
     symbol_maxmin_time = runner.get_id("maxmin_time")
 
     # load() and run() are called by client.Sdkruntime.__enter__
-    #runner.load()
-    #runner.run()
+    # runner.load()
+    # runner.run()
 
     # Construct A data and copy random A matrix PE (0,0) for verification
     A_mat = np.random.rand(nb, nb)
-    A_data = np.zeros(width*height*(nb*padded_nb+1), dtype=np.float32)
+    A_data = np.zeros(width * height * (nb * padded_nb + 1), dtype=np.float32)
 
     for w in range(width):
       for h in range(height):
         for i in range(nb):
           for j in range(nb):
-            A_data[(h*width + w)*(nb*padded_nb+1) + j*padded_nb + i + 1] = A_mat[i, j]
+            A_data[(h * width + w) * (nb * padded_nb + 1) + j * padded_nb + i + 1] = A_mat[i, j]
 
     print()
     print("Beginning run.")
     print("Copy A matrices to device...")
-    runner.memcpy_h2d(A_symbol, A_data, 0, 0, width, height, nb*padded_nb+1,
-      streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    runner.memcpy_h2d(
+        A_symbol,
+        A_data,
+        0,
+        0,
+        width,
+        height,
+        nb * padded_nb + 1,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_32BIT,
+        order=MemcpyOrder.ROW_MAJOR,
+        nonblock=False,
+    )
 
     # Construct x data and copy random x vector to PE (0,0) for verification
     x_vec = np.random.rand(nb)
-    x_data = np.zeros(width*height*nb, dtype=np.float32)
+    x_data = np.zeros(width * height * nb, dtype=np.float32)
     for w in range(width):
       for h in range(height):
-        x_data[(h*width + w)*nb:(h*width + w)*nb+nb] = x_vec
-
+        x_data[(h * width + w) * nb:(h * width + w) * nb + nb] = x_vec
 
     print("Copy x vectors to device...")
-    runner.memcpy_h2d(x_symbol, x_data, 0, 0, width, height, nb,
-      streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    runner.memcpy_h2d(
+        x_symbol,
+        x_data,
+        0,
+        0,
+        width,
+        height,
+        nb,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_32BIT,
+        order=MemcpyOrder.ROW_MAJOR,
+        nonblock=False,
+    )
 
     # Launch the compute kernel
     print("Launch kernel...")
     runner.call("compute", [], nonblock=False)
 
     # Copy back timestamps from device
-    data = np.zeros((width*height*3, 1), dtype=np.uint32)
-    runner.memcpy_d2h(data, symbol_maxmin_time, 0, 0, width, height, 3,
-      streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    data = np.zeros((width * height * 3, 1), dtype=np.uint32)
+    runner.memcpy_d2h(
+        data,
+        symbol_maxmin_time,
+        0,
+        0,
+        width,
+        height,
+        3,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_32BIT,
+        order=MemcpyOrder.ROW_MAJOR,
+        nonblock=False,
+    )
     maxmin_time_hwl = data.view(np.float32).reshape((height, width, 3))
     print("Copied back timestamps.")
 
     # Copy back data array from device
     if verify:
-      data = np.zeros((width*height*padded_nb, 1), dtype=np.uint32)
-      runner.memcpy_d2h(data, y_symbol, 0, 0, width, height, padded_nb,
-        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+      data = np.zeros((width * height * padded_nb, 1), dtype=np.uint32)
+      runner.memcpy_d2h(
+          data,
+          y_symbol,
+          0,
+          0,
+          width,
+          height,
+          padded_nb,
+          streaming=False,
+          data_type=MemcpyDataType.MEMCPY_32BIT,
+          order=MemcpyOrder.ROW_MAJOR,
+          nonblock=False,
+      )
       y_device_array = data.view(np.float32).reshape((height, width, padded_nb))
       print("Copied back Y array.")
 
     print("Done.")
 
     # stop() is called by client.Sdkruntime.__exit__
-    #runner.stop()
+    # runner.stop()
 
   # End walltime timer
   end = time.time()
-  walltime = end-start
-
+  walltime = end - start
 
   ###########
   # Verify
@@ -208,7 +218,6 @@ def main():
       for h in range(height):
         np.testing.assert_allclose(y_device_array[h, w, :nb], expected, atol=0.0001, rtol=0)
     print("SUCCESS!")
-
 
   #################################
   # Calculate mem accesses and FLOP
@@ -235,10 +244,9 @@ def main():
   # = nb * nb + nb * (nb-1)
   # = 2*nb*nb - nb
 
-  total_relative_accesses = width * height * (4*nb*nb + 8*nb)
-  total_absolute_accesses = width * height * (12*nb*nb + 4*nb)
-  total_flop = width * height * (2*nb*nb - nb)
-
+  total_relative_accesses = width * height * (4 * nb * nb + 8 * nb)
+  total_absolute_accesses = width * height * (12 * nb * nb + 4 * nb)
+  total_flop = width * height * (2 * nb * nb - nb)
 
   #######################
   # Calculate cycle count
@@ -253,12 +261,12 @@ def main():
       hex_t0 = int(float_to_hex(maxmin_time_hwl[(h, w, 0)]), base=16)
       hex_t1 = int(float_to_hex(maxmin_time_hwl[(h, w, 1)]), base=16)
       hex_t2 = int(float_to_hex(maxmin_time_hwl[(h, w, 2)]), base=16)
-      tsc_tensor_d2h[0] = hex_t0 & 0x0000ffff
-      tsc_tensor_d2h[1] = (hex_t0 >> 16) & 0x0000ffff
-      tsc_tensor_d2h[2] = hex_t1 & 0x0000ffff
-      tsc_tensor_d2h[3] = (hex_t1 >> 16) & 0x0000ffff
-      tsc_tensor_d2h[4] = hex_t2 & 0x0000ffff
-      tsc_tensor_d2h[5] = (hex_t2 >> 16) & 0x0000ffff
+      tsc_tensor_d2h[0] = hex_t0 & 0x0000FFFF
+      tsc_tensor_d2h[1] = (hex_t0 >> 16) & 0x0000FFFF
+      tsc_tensor_d2h[2] = hex_t1 & 0x0000FFFF
+      tsc_tensor_d2h[3] = (hex_t1 >> 16) & 0x0000FFFF
+      tsc_tensor_d2h[4] = hex_t2 & 0x0000FFFF
+      tsc_tensor_d2h[5] = (hex_t2 >> 16) & 0x0000FFFF
 
       cycles = sub_ts(tsc_tensor_d2h)
       if cycles < min_cycles:
@@ -270,28 +278,26 @@ def main():
         max_w = w
         max_h = h
 
-
   #####################
   # Calculate bandwidth
   #####################
 
   # Calculate in bytes/sec and FLOP/sec for program rectangle
-  secs = max_cycles / 850000000.
+  secs = max_cycles / 850000000.0
   relative_bw = total_relative_accesses / secs * iters
   absolute_bw = total_absolute_accesses / secs * iters
   flops_sec = total_flop / secs
 
   # Convert to Petabytes/sec and PetaFLOPS
-  relative_bw /= 1.E15
-  absolute_bw /= 1.E15
-  flops_sec /= 1.E15
+  relative_bw /= 1.0e15
+  absolute_bw /= 1.0e15
+  flops_sec /= 1.0e15
 
   # Scale to program rectangle
-  scale_factor = (994.*750.) / (width*height)
+  scale_factor = (994.0 * 750.0) / (width * height)
   scale_relative_bw = relative_bw * scale_factor
   scale_absolute_bw = absolute_bw * scale_factor
   scale_flops_sec = flops_sec * scale_factor
-
 
   #################
   # Generate output
@@ -321,12 +327,28 @@ def main():
 
   # Write a CSV
   csv_name = name + ".csv"
-  with open(csv_name, mode='a') as csv_file:
+  with open(csv_name, mode="a", encoding="utf-8") as csv_file:
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["appliance", width, height, iters, nb, padded_nb, min_cycles, max_cycles,
-      total_relative_accesses, total_absolute_accesses, relative_bw, absolute_bw,
-      scale_relative_bw, scale_absolute_bw, total_flop, flops_sec, scale_flops_sec, walltime])
-
+    csv_writer.writerow([
+        "appliance",
+        width,
+        height,
+        iters,
+        nb,
+        padded_nb,
+        min_cycles,
+        max_cycles,
+        total_relative_accesses,
+        total_absolute_accesses,
+        relative_bw,
+        absolute_bw,
+        scale_relative_bw,
+        scale_absolute_bw,
+        total_flop,
+        flops_sec,
+        scale_flops_sec,
+        walltime,
+    ])
 
 
 if __name__ == "__main__":

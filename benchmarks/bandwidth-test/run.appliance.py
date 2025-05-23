@@ -1,4 +1,4 @@
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -89,37 +89,27 @@
        bandwidth = ((wvlts * 4)/time_send)*loop_count
 """
 
-
-import struct
-import os
-from typing import Optional
-from pathlib import Path
-import shutil
-import subprocess
-import random
 import json
+import random
+import struct
+from typing import Optional
 
 import numpy as np
-
 from bw_cmd_parser import parse_args
 
-from cerebras.sdk.client import (
-        SdkCompiler,
-        SdkRuntime,
-)
-
-from cerebras.appliance.pb.sdk.sdk_common_pb2 import (
-        MemcpyDataType,
-        MemcpyOrder,
-)
+from cerebras.appliance.pb.sdk.sdk_common_pb2 import MemcpyDataType, MemcpyOrder # pylint: disable=import-error,no-name-in-module
+from cerebras.sdk.client import SdkCompiler, SdkRuntime # pylint: disable=import-error,no-name-in-module
 
 hash_filename = "hash.json"
 
+
 def float_to_hex(f):
-  return hex(struct.unpack('<I', struct.pack('<f', f))[0])
+  return hex(struct.unpack("<I", struct.pack("<f", f))[0])
+
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
+
 
 def cast_uint32(x):
   if isinstance(x, (np.float16, np.int16, np.uint16)):
@@ -131,23 +121,24 @@ def cast_uint32(x):
     val = np.uint32(x)
   elif isinstance(x, float):
     z = np.float32(x)
-    val = z.view(np.uint32)
+    val = z.view(np.uint32) # pylint: disable=too-many-function-args
   else:
     raise RuntimeError(f"type of x {type(x)} is not supported")
 
   return val
 
+
 def csl_compile_core(
-    csl_path: str, # path to CSL files
-    out_path: str, # path where to store the artifact
+    csl_path: str,  # path to CSL files
+    out_path: str,  # path where to store the artifact
     width: int,  # width of the core
-    height: int, # height of the core
+    height: int,  # height of the core
     pe_length: int,
     file_config: str,
     elf_dir: str,
     fabric_width: int,
     fabric_height: int,
-    core_fabric_offset_x: int, # fabric-offsets of the core
+    core_fabric_offset_x: int,  # fabric-offsets of the core
     core_fabric_offset_y: int,
     arch: Optional[str],
     C0: int,
@@ -157,9 +148,9 @@ def csl_compile_core(
     C4: int,
     channels: int,
     width_west_buf: int,
-    width_east_buf: int
+    width_east_buf: int,
 ):
-    compiler = SdkCompiler()
+  with SdkCompiler() as compiler:
     args = []
     args.append(f"--fabric-dims={fabric_width},{fabric_height}")
     args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
@@ -182,20 +173,15 @@ def csl_compile_core(
     args_str = " ".join(args)
     hashstr = compiler.compile(csl_path, file_config, args_str, out_path)
     print("compile artifact:", hashstr)
-    return hashstr 
+    return hashstr
 
 
-def hwl_2_oned_colmajor(
-    height: int,
-    width: int,
-    pe_length: int,
-    A_hwl: np.ndarray
-):
+def hwl_2_oned_colmajor(height: int, width: int, pe_length: int, A_hwl: np.ndarray):
   """
     Given a 3-D tensor A[height][width][pe_length], transform it to
     1D array by column-major
-  """
-  A_1d = np.zeros(height*width*pe_length, np.float32)
+    """
+  A_1d = np.zeros(height * width * pe_length, np.float32)
   idx = 0
   for l in range(pe_length):
     for w in range(width):
@@ -241,7 +227,7 @@ def main():
 
   np.random.seed(2)
   # A is h-by-w-by-l
-  A = np.arange(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32)
+  A = (np.arange(height * width * pe_length).reshape(height, width, pe_length).astype(np.float32))
 
   A_1d = hwl_2_oned_colmajor(height, width, pe_length, A)
 
@@ -254,8 +240,8 @@ def main():
   core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
   core_fabric_offset_y = fabric_offset_y
   # (min_fabric_width, min_fabric_height) is the minimal dimension to run the app
-  min_fabric_width = (core_fabric_offset_x + width + 2 + 1 + width_east_buf)
-  min_fabric_height = (core_fabric_offset_y + height + 1)
+  min_fabric_width = core_fabric_offset_x + width + 2 + 1 + width_east_buf
+  min_fabric_height = core_fabric_offset_y + height + 1
 
   fabric_width = 0
   fabric_height = 0
@@ -272,7 +258,7 @@ def main():
   assert fabric_height >= min_fabric_height
 
   # prepare the simulation
-  print('store ELFs and log files in the folder ', dirname)
+  print("store ELFs and log files in the folder ", dirname)
 
   # layout of a rectangle
   code_csl = "bw_sync_layout.csl"
@@ -287,41 +273,44 @@ def main():
   out_path = "."
 
   if args.compile_only:
-    print("WARNING: compile the code, don't run SdkRuntime because it should be done in a separate appliance job");
+    print(
+        "WARNING: compile the code, don't run SdkRuntime because "
+        "it should be done in a separate appliance job"
+    )
     hashstr = csl_compile_core(
-      csl_path,
-      out_path,
-      width,
-      height,
-      pe_length,
-      code_csl,
-      dirname,
-      fabric_width,
-      fabric_height,
-      core_fabric_offset_x,
-      core_fabric_offset_y,
-      args.arch,
-      C0,
-      C1,
-      C2,
-      C3,
-      C4,
-      channels,
-      width_west_buf,
-      width_east_buf
+        csl_path,
+        out_path,
+        width,
+        height,
+        pe_length,
+        code_csl,
+        dirname,
+        fabric_width,
+        fabric_height,
+        core_fabric_offset_x,
+        core_fabric_offset_y,
+        args.arch,
+        C0,
+        C1,
+        C2,
+        C3,
+        C4,
+        channels,
+        width_west_buf,
+        width_east_buf,
     )
     print(f"Dump artifact name to file {hash_filename}")
-    with open(hash_filename, "w") as write_file:
+    with open(hash_filename, "w", encoding="utf-8") as write_file:
       json.dump(hashstr, write_file)
     print("COMPILE ONLY: EXIT")
     return
 
   print(f"Load artifact name from file {hash_filename}")
-  with open(hash_filename, "r") as f:
+  with open(hash_filename, "r", encoding="utf-8") as f:
     artifact_path = json.load(f)
 
   # output tensor via D2H
-  E_1d = np.zeros(height*width*pe_length, np.float32)
+  E_1d = np.zeros(height * width * pe_length, np.float32)
 
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
 
@@ -332,8 +321,8 @@ def main():
     symbol_time_ref = runner.get_id("time_ref")
 
     # load() and run() are called by client.Sdkruntime.__enter__
-    #runner.load()
-    #runner.run()
+    # runner.load()
+    # runner.run()
 
     print("step 1: sync() synchronizes all PEs and records reference clock")
     runner.call("f_sync", [], nonblock=True)
@@ -344,13 +333,35 @@ def main():
     if args.d2h:
       for j in range(loop_count):
         print(f"step 3: measure D2H with loop_count = {loop_count}, {j}-th")
-        runner.memcpy_d2h(E_1d, symbol_A, 0, 0, width, height, pe_length,\
-          streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+        runner.memcpy_d2h(
+            E_1d,
+            symbol_A,
+            0,
+            0,
+            width,
+            height,
+            pe_length,
+            streaming=False,
+            data_type=memcpy_dtype,
+            order=MemcpyOrder.COL_MAJOR,
+            nonblock=True,
+        )
     else:
       for j in range(loop_count):
         print(f"step 3: measure H2D with loop_count = {loop_count}, {j}-th")
-        runner.memcpy_h2d(symbol_A, A_1d, 0, 0, width, height, pe_length,\
-          streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+        runner.memcpy_h2d(
+            symbol_A,
+            A_1d,
+            0,
+            0,
+            width,
+            height,
+            pe_length,
+            streaming=False,
+            data_type=memcpy_dtype,
+            order=MemcpyOrder.COL_MAJOR,
+            nonblock=True,
+        )
 
     print("step 4: toc() records time_end")
     runner.call("f_toc", [], nonblock=False)
@@ -361,24 +372,46 @@ def main():
     print("step 6: D2H (time_start, time_end)")
     # time_start/time_end is of type u16[3]
     # {time_start, time_end} is packed into three f32
-    time_memcpy_1d_f32 = np.zeros(height*width*3, np.float32)
-    runner.memcpy_d2h(time_memcpy_1d_f32, symbol_time_memcpy, 0, 0, width, height, 3,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=True)
+    time_memcpy_1d_f32 = np.zeros(height * width * 3, np.float32)
+    runner.memcpy_d2h(
+        time_memcpy_1d_f32,
+        symbol_time_memcpy,
+        0,
+        0,
+        width,
+        height,
+        3,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.ROW_MAJOR,
+        nonblock=True,
+    )
 
     print("step 7: prepare reference clock")
     runner.call("f_reference_timestamps", [], nonblock=False)
 
     print("step 8: D2H reference clock")
     # time_ref is of type u16[3], packed into two f32
-    time_ref_1d_f32 = np.zeros(height*width*2, np.float32)
-    runner.memcpy_d2h(time_ref_1d_f32, symbol_time_ref, 0, 0, width, height, 2,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    time_ref_1d_f32 = np.zeros(height * width * 2, np.float32)
+    runner.memcpy_d2h(
+        time_ref_1d_f32,
+        symbol_time_ref,
+        0,
+        0,
+        width,
+        height,
+        2,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.ROW_MAJOR,
+        nonblock=False,
+    )
 
     # stop() is called by client.Sdkruntime.__exit__
-    #runner.stop()
+    # runner.stop()
 
-  time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (height, width, 3), order='C')
-  time_ref_hwl = np.reshape(time_ref_1d_f32, (height, width, 2), order='C')
+  time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (height, width, 3), order="C")
+  time_ref_hwl = np.reshape(time_ref_1d_f32, (height, width, 2), order="C")
 
   # time_start = start time of H2D/D2H
   time_start = np.zeros((height, width)).astype(int)
@@ -390,13 +423,13 @@ def main():
       hex_t0 = int(float_to_hex(time_memcpy_hwl[(h, w, 0)]), base=16)
       hex_t1 = int(float_to_hex(time_memcpy_hwl[(h, w, 1)]), base=16)
       hex_t2 = int(float_to_hex(time_memcpy_hwl[(h, w, 2)]), base=16)
-      word[0] = hex_t0 & 0x0000ffff
-      word[1] = (hex_t0 >> 16) & 0x0000ffff
-      word[2] = hex_t1 & 0x0000ffff
+      word[0] = hex_t0 & 0x0000FFFF
+      word[1] = (hex_t0 >> 16) & 0x0000FFFF
+      word[2] = hex_t1 & 0x0000FFFF
       time_start[(h, w)] = make_u48(word)
-      word[0] = (hex_t1 >> 16) & 0x0000ffff
-      word[1] = hex_t2 & 0x0000ffff
-      word[2] = (hex_t2 >> 16) & 0x0000ffff
+      word[0] = (hex_t1 >> 16) & 0x0000FFFF
+      word[1] = hex_t2 & 0x0000FFFF
+      word[2] = (hex_t2 >> 16) & 0x0000FFFF
       time_end[(h, w)] = make_u48(word)
 
   # time_ref = reference clock
@@ -406,9 +439,9 @@ def main():
     for h in range(height):
       hex_t0 = int(float_to_hex(time_ref_hwl[(h, w, 0)]), base=16)
       hex_t1 = int(float_to_hex(time_ref_hwl[(h, w, 1)]), base=16)
-      word[0] = hex_t0 & 0x0000ffff
-      word[1] = (hex_t0 >> 16) & 0x0000ffff
-      word[2] = hex_t1 & 0x0000ffff
+      word[0] = hex_t0 & 0x0000FFFF
+      word[1] = (hex_t0 >> 16) & 0x0000FFFF
+      word[2] = hex_t1 & 0x0000FFFF
       time_ref[(h, w)] = make_u48(word)
   # adjust the reference clock by the propagation delay
   for py in range(height):
@@ -423,12 +456,12 @@ def main():
   # 850MHz --> 1 cycle = (1/0.85) ns = (1/0.85)*1.e-3 us
   # time_send = (cycles_send / 0.85) *1.e-3 us
   # bandwidth = (((wvlts-1) * 4)/time_send) MBS
-  wvlts = height*width*pe_length
+  wvlts = height * width * pe_length
   min_time_start = time_start.min()
   max_time_end = time_end.max()
   cycles_send = max_time_end - min_time_start
-  time_send = (cycles_send / 0.85) *1.e-3
-  bandwidth = ((wvlts * 4)/time_send)*loop_count
+  time_send = (cycles_send / 0.85) * 1.0e-3
+  bandwidth = ((wvlts * 4) / time_send) * loop_count
   print(f"wvlts = {wvlts}, loop_count = {loop_count}")
   print(f"cycles_send = {cycles_send} cycles")
   print(f"time_send = {time_send} us")

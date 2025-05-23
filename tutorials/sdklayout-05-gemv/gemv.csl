@@ -1,0 +1,65 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param x_in: color;
+param b_in: color;
+param y_out: color;
+param width: u16;
+param height: u16;
+param control_ep: u16;
+
+const x_in_q = @get_input_queue(0);
+const b_in_q = @get_input_queue(1);
+const y_out_q = @get_output_queue(0);
+
+export var Ax_temp = @zeros([height]f32);
+const dsd_Ax_temp = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{height}->Ax_temp[i]});
+
+export var A = @zeros([height, width]f32);
+const dsd_A = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{height}->A[i, 0], .wavelet_index_offset = true});
+
+const in = @get_dsd(fabin_dsd, .{.extent = height, .fabric_color = b_in, .input_queue = b_in_q});
+const out = @get_dsd(fabout_dsd, .{.extent = height, .fabric_color = y_out, .output_queue = y_out_q});
+
+export var idx: u16 = 0;
+
+// Wavelet-triggered task (WTT) that consumes the stream of vector 'x'.
+const wtt_x_id = if (@is_arch("wse3")) @get_data_task_id(x_in_q) else @get_data_task_id(x_in);
+task wtt_x(data: f32) void {
+  @fmacs(dsd_Ax_temp, dsd_Ax_temp, dsd_A, data, .{.index = 2 * idx});
+  idx += 1;
+}
+
+// This 'sentinel' task is a control-triggered task, i.e., a task
+// that is activated by a control wavelet containing 'sentinel_id'
+// in its payload.
+// The demux layer is the one that will emit these control wavelets.
+// Specifically, each PE in demux will emit a control wavelet to
+// activate 'sentinel' once its done forwarding 'batch_size' elements
+// of vector 'x'.
+const sentinel_id = @get_control_task_id(control_ep);
+task sentinel() void {
+  @fadds(out, in, dsd_Ax_temp, .{.async = true});
+}
+
+comptime {
+  @bind_data_task(wtt_x, wtt_x_id);
+  @bind_control_task(sentinel, sentinel_id);
+  @initialize_queue(x_in_q, .{.color = x_in});
+  @initialize_queue(b_in_q, .{.color = b_in});
+
+  if (@is_arch("wse3")) {
+    @initialize_queue(y_out_q, .{.color = y_out});
+  }
+}

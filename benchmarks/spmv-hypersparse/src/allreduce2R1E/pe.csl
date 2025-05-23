@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -550,7 +550,7 @@ task f_send_data() void {
             @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_dispatch} );
             @load_to_dsr(src1_dsr, mem_x_buf_dsd);
             @mov32(dest_dsr, src1_dsr, .{.async=true} );
-            count_recv_or_send += 1; 
+            count_recv_or_send += 1;
         }else{
             // sending is done (including data wavelets and control wavelets)
             @unblock(C_LOCK);
@@ -684,7 +684,7 @@ fn rowReduce_configure() void {
         // last PE only receives data
         // .rx = .{ WEST }, .tx = .{ RAMP },
         r_state = r_state | INPUT_WEST | OUTPUT_RAMP;
-    }else{ 
+    }else{
         // 0 < px < width-1
         // .rx = .{ WEST }, .tx = .{ EAST },
         r_state = r_state | INPUT_WEST | OUTPUT_EAST;

@@ -1,0 +1,38 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param FP: i16;   // Precision: 0 == float16, 1 == float32
+
+param N: u16;   // FFT size in each dimension
+param NUM_PENCILS_PER_DIM: u16; // Pencils in each dimension per PE
+
+// Number of PEs for FFT in both X and Y dimension
+param WIDTH: i16 = N / NUM_PENCILS_PER_DIM;
+
+const tensor_type: type = if (FP == 0) f16 else f32;
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = WIDTH,
+  .height = WIDTH,
+});
+
+const fft_helper = @import_module("<kernels/fft/fft3d_layout>", .{
+  .width = WIDTH,
+  .memcpy = memcpy,
+});
+
+layout {
+  @set_rectangle(WIDTH, WIDTH);
+  fft_helper.FFT_kernel(WIDTH, N, tensor_type);
+}

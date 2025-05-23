@@ -13,7 +13,7 @@ The program above will perform 750*994 matvecs, with one matvec
 occurring on each PE, for each value of N.
 
 There is also an ``iters`` flag, which allows you to average
-cycle counts over multiple runs. Here is an example for a 
+cycle counts over multiple runs. Here is an example for a
 10 x 10 program rectangle run in the simulator:
 ``./sweep.py --dims 10,10 --iters 10``.
 
@@ -31,8 +31,9 @@ where ``fabric-dims`` is the dimension of the simfabric, ``width``, ``height``
 are the dimensions of the program rectangle, ``tile_size`` is N,
 and ``iters`` is the number of iterations over which we average.
 
-Note that the width must be no bigger than 7 less than the x-dimension of the fabric,
-and the height must be no bigger than 2 less than the y-dimension of the fabric.
+Note that the width must be no bigger than 7 less than the x-dimension of the
+fabric, and the height must be no bigger than 2 less than the y-dimension of
+the fabric.
 
 Additionally, if you are running on a real CS-2, ``fabric-dims`` must
 be ``750,994``.
@@ -44,7 +45,7 @@ To run:
    cs_python run.py --name out --verify
 
 where the ``--verify`` flag verifies the result on each PE.
-Note that this flag is incompatible with any number of iterations greater than 1.
+This flag is incompatible with any number of iterations greater than 1.
 
 Again, pass ``--cmaddr`` to run on a real CS-2.
 If you're just running on simfabric, there's no need to use a width or height

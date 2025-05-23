@@ -1,4 +1,4 @@
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,26 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import json
-from google.protobuf.json_format import MessageToJson
 
-#from tests.appliance.common.cluster_details_utils import build_cluster_details
-#import cluster_details_utils
-
-from cerebras.sdk.client import (
-        SdkCompiler,
-)
+from cerebras.sdk.client import SdkCompiler # pylint: disable=import-error,no-name-in-module
 
 hash_filename = "hash.json"
 
-compiler = SdkCompiler()
+with SdkCompiler() as compiler:
 
-hashstr = compiler.compile("./src", "layout_matvec.csl", "--arch wse3 --fabric-dims=9,4 --fabric-offsets=4,1 --params=width:2,height:2,tile_size:25,iters:1 -o latest --memcpy --channels=1")
+  hashstr = compiler.compile(
+      "./src",
+      "layout_matvec.csl",
+      "--arch wse3 --fabric-dims=9,4 --fabric-offsets=4,1 "
+      "--params=width:2,height:2,tile_size:25,iters:1 -o latest --memcpy --channels=1",
+  )
 
-print("compile artifact:", hashstr)
+  print("compile artifact:", hashstr)
 
-print(f"dump artifact name to file {hash_filename}")
-with open(hash_filename, "w") as write_file:
+  print(f"dump artifact name to file {hash_filename}")
+  with open(hash_filename, "w", encoding="utf-8") as write_file:
     json.dump(hashstr, write_file)
-

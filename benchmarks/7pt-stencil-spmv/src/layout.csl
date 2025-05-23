@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,14 +55,14 @@ const EN_REDUCE_2: local_task_id = @get_local_task_id(18);
 const EN_REDUCE_3: local_task_id = @get_local_task_id(19);
 const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
 
-const stencil = @import_module( "../../csl-libs/stencil_3d_7pts/layout.csl", .{
+const stencil = @import_module( "../../benchmark-libs/stencil_3d_7pts/layout.csl", .{
     .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
     .entrypoints = [3]local_task_id{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
     .width = width,
     .height = height
     });
 
-const reduce = @import_module( "../../csl-libs/allreduce/layout.csl", .{
+const reduce = @import_module( "../../benchmark-libs/allreduce/layout.csl", .{
     .colors = [1]color{C8},
     .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
     .width = width,

@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,7 +111,7 @@ fn get_params(px:i16, py:i16) comptime_struct {
     const prow_id: i16 = py;
 
     const col_params = @concat_structs(invariants, get_west_east_train_colors(pcol_id));
-        
+
     const common_params = @concat_structs(
         col_params,
         .{

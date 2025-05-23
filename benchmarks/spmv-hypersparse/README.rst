@@ -11,21 +11,22 @@ The kernel ``kernel.csl`` defines a couple of host-callable functions,
 ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order to synchronize the PEs and
 record the timing of ``spmv``.
 
-The kernel ``allreduce2R1E/pe.csl`` performs a reduction over the whole rectangle
-to synchronize the PEs, then the bottom-right PE sends a signal to other PEs
-to sample the reference clock. The ``allreduce2R1E`` is a variant of ``allreduce``
-in ``stencil-3d-7pts``. The former uses 2 routable colors and 1 entrypoints, the
-latter uses 1 routable color and 4 entrypoints. ``allreduce2R1E`` is designed for
-spmv kernel which only has three unused colors. 
+The kernel ``allreduce2R1E/pe.csl`` performs a reduction over the whole
+rectangle to synchronize the PEs, then the bottom-right PE sends a signal to
+other PEs to sample the reference clock. The ``allreduce2R1E`` is a variant of
+``allreduce`` in ``stencil-3d-7pts``. The former uses 2 routable colors and
+1 entrypoints, the latter uses 1 routable color and 4 entrypoints.
+``allreduce2R1E`` is designed for spmv kernel which only has three unused
+colors.
 
 The kernel ``hypersparse_spmv/pe.csl`` performs a matrix-vector product (spmv)
-where the matrix ``A`` is hypersparse, partitioned into 2D grids. The input 
+where the matrix ``A`` is hypersparse, partitioned into 2D grids. The input
 vector ``x`` and output vector ``y`` are also distributed into 2D grids.
 
-The user has to provide the matrix ``A`` in Matrix Market File format with 1-based
-index. To obtain the best performance, the user may need to reorder the matrix
-such that the variatoin of the nonzeros of each parition is small. One option is
-``util/analyze.cpp`` which provides a load balancing algorithm.
+The user has to provide the matrix ``A`` in Matrix Market File format with
+1-based index. To obtain the best performance, the user may need to reorder the
+matrix such that the variatoin of the nonzeros of each parition is small. One
+option is ``util/analyze.cpp`` which provides a load balancing algorithm.
 
 The script ``run.py`` has the following parameters:
 

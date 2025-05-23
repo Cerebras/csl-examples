@@ -4,6 +4,15 @@ Release Notes
 The following are the release notes for the CSL Examples repository,
 ``csl-examples``.
 
+Version 1.4.0
+-------------
+
+- The examples are improved and updated to comply with the SDK version 1.3.0.
+
+- A series of new example tutorial programs have been introduced to demonstrate
+  the new ``SdkLayout`` API for program layout specification, which is
+  currently in beta.
+
 Version 1.3.0
 -------------
 

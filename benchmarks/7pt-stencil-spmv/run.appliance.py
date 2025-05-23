@@ -1,4 +1,4 @@
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,58 +66,40 @@
     --channels=<int> specifies the number of I/O channels, no bigger than 16
 """
 
-
-import struct
-import os
-from typing import Optional
-from pathlib import Path
-import shutil
-import subprocess
-import random
 import json
+import random
+import struct
+from typing import Optional
 
 import numpy as np
-
-
 from cmd_parser import parse_args
+from util import hwl_2_oned_colmajor, laplacian, oned_to_hwl_colmajor
 
-
-from util import (
-    hwl_2_oned_colmajor,
-    oned_to_hwl_colmajor,
-    laplacian,
-)
-from cerebras.sdk.client import (
-        SdkCompiler,
-        SdkRuntime,
-)
-
-from cerebras.appliance.pb.sdk.sdk_common_pb2 import (
-        MemcpyDataType,
-        MemcpyOrder,
-)
+from cerebras.appliance.pb.sdk.sdk_common_pb2 import MemcpyDataType, MemcpyOrder # pylint: disable=import-error,no-name-in-module
+from cerebras.sdk.client import SdkCompiler, SdkRuntime # pylint: disable=import-error,no-name-in-module
 
 hash_filename = "hash.json"
 
 
 def float_to_hex(f):
-  return hex(struct.unpack('<I', struct.pack('<f', f))[0])
+  return hex(struct.unpack("<I", struct.pack("<f", f))[0])
+
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
 
 
 def csl_compile_core(
-    csl_path: str, # path to CSL files
+    csl_path: str,  # path to CSL files
     width: int,  # width of the core
-    height: int, # height of the core
+    height: int,  # height of the core
     pe_length: int,
     blockSize: int,
     file_config: str,
     elf_dir: str,
     fabric_width: int,
     fabric_height: int,
-    core_fabric_offset_x: int, # fabric-offsets of the core
+    core_fabric_offset_x: int,  # fabric-offsets of the core
     core_fabric_offset_y: int,
     arch: Optional[str],
     C0: int,
@@ -131,39 +113,36 @@ def csl_compile_core(
     C8: int,
     channels: int,
     width_west_buf: int,
-    width_east_buf: int
+    width_east_buf: int,
 ):
-  compiler = SdkCompiler()
-  args = []
-  args.append(f"--fabric-dims={fabric_width},{fabric_height}")
-  args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
-  args.append(f"--params=width:{width},height:{height},MAX_ZDIM:{pe_length}")
-  args.append(f"--params=BLOCK_SIZE:{blockSize}")
-  args.append(f"--params=C0_ID:{C0}")
-  args.append(f"--params=C1_ID:{C1}")
-  args.append(f"--params=C2_ID:{C2}")
-  args.append(f"--params=C3_ID:{C3}")
-  args.append(f"--params=C4_ID:{C4}")
-  args.append(f"--params=C5_ID:{C5}")
-  args.append(f"--params=C6_ID:{C6}")
-  args.append(f"--params=C7_ID:{C7}")
-  args.append(f"--params=C8_ID:{C8}")
+  with SdkCompiler() as compiler:
+    args = []
+    args.append(f"--fabric-dims={fabric_width},{fabric_height}")
+    args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
+    args.append(f"--params=width:{width},height:{height},MAX_ZDIM:{pe_length}")
+    args.append(f"--params=BLOCK_SIZE:{blockSize}")
+    args.append(f"--params=C0_ID:{C0}")
+    args.append(f"--params=C1_ID:{C1}")
+    args.append(f"--params=C2_ID:{C2}")
+    args.append(f"--params=C3_ID:{C3}")
+    args.append(f"--params=C4_ID:{C4}")
+    args.append(f"--params=C5_ID:{C5}")
+    args.append(f"--params=C6_ID:{C6}")
+    args.append(f"--params=C7_ID:{C7}")
+    args.append(f"--params=C8_ID:{C8}")
 
-  args.append(f"-o={elf_dir}")
-  if arch is not None:
-    args.append(f"--arch={arch}")
-  args.append("--memcpy")
-  args.append(f"--channels={channels}")
-  args.append(f"--width-west-buf={width_west_buf}")
-  args.append(f"--width-east-buf={width_east_buf}")
+    args.append(f"-o={elf_dir}")
+    if arch is not None:
+      args.append(f"--arch={arch}")
+    args.append("--memcpy")
+    args.append(f"--channels={channels}")
+    args.append(f"--width-west-buf={width_west_buf}")
+    args.append(f"--width-east-buf={width_east_buf}")
 
-  args_str = " ".join(args)
-  hashstr = compiler.compile(csl_path, file_config, args_str)
-  print("compile artifact:", hashstr)
-  return hashstr
-
-
-
+    args_str = " ".join(args)
+    hashstr = compiler.compile(csl_path, file_config, args_str)
+    print("compile artifact:", hashstr)
+    return hashstr
 
 
 # How to compile:
@@ -197,27 +176,30 @@ def main():
   zDim = args.zDim
   blockSize = args.blockSize
 
-  print(f"width = {width}, height = {height}, pe_length={pe_length}, zDim={zDim}, blockSize={blockSize}")
+  print(
+      f"width={width}, height={height}, pe_length={pe_length}, zDim={zDim}, blockSize={blockSize}"
+  )
   assert pe_length >= 2, "the maximum size of z must be greater than 1"
   assert zDim <= pe_length, "[0, zDim) cannot exceed the storage"
 
   np.random.seed(2)
   # A is h-by-w-by-l
-  x = np.arange(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) + 100
+  x = (np.arange(height * width * pe_length).reshape(height, width, pe_length).astype(np.float32) +
+       100)
 
   x_1d = hwl_2_oned_colmajor(height, width, pe_length, x, np.float32)
 
   # stencil coefficients has the following order
   # {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
-  stencil_coeff = np.zeros((height, width, 7), dtype = np.float32)
+  stencil_coeff = np.zeros((height, width, 7), dtype=np.float32)
   for i in range(height):
     for j in range(width):
-      stencil_coeff[(i, j, 0)] = -1 # west
-      stencil_coeff[(i, j, 1)] = -2 # east
-      stencil_coeff[(i, j, 2)] = -3 # south
-      stencil_coeff[(i, j, 3)] = -4 # north
-      stencil_coeff[(i, j, 4)] = -5 # bottom
-      stencil_coeff[(i, j, 5)] = -6 # top
+      stencil_coeff[(i, j, 0)] = -1  # west
+      stencil_coeff[(i, j, 1)] = -2  # east
+      stencil_coeff[(i, j, 2)] = -3  # south
+      stencil_coeff[(i, j, 3)] = -4  # north
+      stencil_coeff[(i, j, 4)] = -5  # bottom
+      stencil_coeff[(i, j, 5)] = -6  # top
       stencil_coeff[(i, j, 6)] = 6  # center
 
   stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
@@ -235,8 +217,8 @@ def main():
   core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
   core_fabric_offset_y = fabric_offset_y
   # (min_fabric_width, min_fabric_height) is the minimal dimension to run the app
-  min_fabric_width = (core_fabric_offset_x + width + 2 + 1 + width_east_buf)
-  min_fabric_height = (core_fabric_offset_y + height + 1)
+  min_fabric_width = core_fabric_offset_x + width + 2 + 1 + width_east_buf
+  min_fabric_height = core_fabric_offset_y + height + 1
 
   fabric_width = 0
   fabric_height = 0
@@ -253,7 +235,7 @@ def main():
   assert fabric_height >= min_fabric_height
 
   # prepare the simulation
-  print('store ELFs and log files in the folder ', dirname)
+  print("store ELFs and log files in the folder ", dirname)
 
   # layout of a rectangle
   code_csl = "layout.csl"
@@ -271,41 +253,44 @@ def main():
   csl_path = "./src"
 
   if args.compile_only:
-    print("WARNING: compile the code, don't run SdkRuntime because the server is down after the compilation");
+    print(
+        "WARNING: compile the code, don't run SdkRuntime because "
+        "the server is down after the compilation"
+    )
     hashstr = csl_compile_core(
-      csl_path,
-      width,
-      height,
-      pe_length,
-      blockSize,
-      code_csl,
-      dirname,
-      fabric_width,
-      fabric_height,
-      core_fabric_offset_x,
-      core_fabric_offset_y,
-      args.arch,
-      C0,
-      C1,
-      C2,
-      C3,
-      C4,
-      C5,
-      C6,
-      C7,
-      C8,
-      channels,
-      width_west_buf,
-      width_east_buf
+        csl_path,
+        width,
+        height,
+        pe_length,
+        blockSize,
+        code_csl,
+        dirname,
+        fabric_width,
+        fabric_height,
+        core_fabric_offset_x,
+        core_fabric_offset_y,
+        args.arch,
+        C0,
+        C1,
+        C2,
+        C3,
+        C4,
+        C5,
+        C6,
+        C7,
+        C8,
+        channels,
+        width_west_buf,
+        width_east_buf,
     )
     print(f"dump artifact name to file {hash_filename}")
-    with open(hash_filename, "w") as write_file:
+    with open(hash_filename, "w", encoding="utf-8") as write_file:
       json.dump(hashstr, write_file)
     print("COMPILE ONLY: EXIT")
     return
 
   print(f"load artifact name from file {hash_filename}")
-  with open(hash_filename, "r") as f:
+  with open(hash_filename, "r", encoding="utf-8") as f:
     hashstr = json.load(f)
 
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
@@ -313,24 +298,45 @@ def main():
 
     symbol_x = runner.get_id("x")
     symbol_y = runner.get_id("y")
-    symbol_time_memcpy = runner.get_id("time_memcpy")
     symbol_stencil_coeff = runner.get_id("stencil_coeff")
     symbol_time_buf_u16 = runner.get_id("time_buf_u16")
     symbol_time_ref = runner.get_id("time_ref")
 
     # load() and run() are called by client.Sdkruntime.__enter__
-    #runner.load()
-    #runner.run()
+    # runner.load()
+    # runner.run()
 
-    print(f"copy vector x of type f32")
+    print("copy vector x of type f32")
     # the size of x per PE is pe_length
-    runner.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, pe_length,\
-          streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    runner.memcpy_h2d(
+        symbol_x,
+        x_1d,
+        0,
+        0,
+        width,
+        height,
+        pe_length,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=True,
+    )
 
-    print(f"copy coefficients of type f32")
+    print("copy coefficients of type f32")
     # each PE holds 7 coefficients
-    runner.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
-          streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    runner.memcpy_h2d(
+        symbol_stencil_coeff,
+        stencil_coeff_1d,
+        0,
+        0,
+        width,
+        height,
+        7,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=True,
+    )
 
     print("step 1: sync all PEs")
     runner.launch("f_sync", np.int16(1), nonblock=False)
@@ -350,28 +356,61 @@ def main():
 
     print("step 6: D2H (time_start, time_end)")
     # time_start/time_end is of type u16[3]
-    time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
-    runner.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
-      streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_memcpy_hwl_1d = np.zeros(height * width * 6, np.uint32)
+    runner.memcpy_d2h(
+        time_memcpy_hwl_1d,
+        symbol_time_buf_u16,
+        0,
+        0,
+        width,
+        height,
+        6,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_16BIT,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=False,
+    )
     time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
 
     print("step 7: D2H y of type f32")
-    y_1d = np.zeros(height*width*pe_length, np.float32)
-    runner.memcpy_d2h(y_1d, symbol_y, 0, 0, width, height, pe_length,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    y_wse = np.reshape(y_1d, (height, width, pe_length), order='F')
+    y_1d = np.zeros(height * width * pe_length, np.float32)
+    runner.memcpy_d2h(
+        y_1d,
+        symbol_y,
+        0,
+        0,
+        width,
+        height,
+        pe_length,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=False,
+    )
+    y_wse = np.reshape(y_1d, (height, width, pe_length), order="F")
 
     print("step 8: prepare reference clock")
     runner.launch("f_reference_timestamps", nonblock=False)
 
     print("step 9: D2H reference clock")
-    time_ref_1d = np.zeros(height*width*3, np.uint32)
-    runner.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
-      streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_ref_1d = np.zeros(height * width * 3, np.uint32)
+    runner.memcpy_d2h(
+        time_ref_1d,
+        symbol_time_ref,
+        0,
+        0,
+        width,
+        height,
+        3,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_16BIT,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=False,
+    )
     time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
 
     # stop() is called by client.Sdkruntime.__exit__
-    #runner.stop()
+    # runner.stop()
 
   # time_start = start time of spmv
   time_start = np.zeros((height, width)).astype(int)
@@ -383,11 +422,11 @@ def main():
       word[0] = time_memcpy_hwl[(h, w, 0)]
       word[1] = time_memcpy_hwl[(h, w, 1)]
       word[2] = time_memcpy_hwl[(h, w, 2)]
-      time_start[(h,w)] = make_u48(word)
+      time_start[(h, w)] = make_u48(word)
       word[0] = time_memcpy_hwl[(h, w, 3)]
       word[1] = time_memcpy_hwl[(h, w, 4)]
       word[2] = time_memcpy_hwl[(h, w, 5)]
-      time_end[(h,w)] = make_u48(word)
+      time_end[(h, w)] = make_u48(word)
 
   # time_ref = reference clock
   time_ref = np.zeros((height, width)).astype(int)
@@ -404,7 +443,7 @@ def main():
   #     (h-1) - py + (w-1) - px
   for py in range(height):
     for px in range(width):
-      time_ref[(py, px)] = time_ref[(py, px)] - ((width+height-2)-(px + py))
+      time_ref[(py, px)] = time_ref[(py, px)] - ((width + height - 2) - (px + py))
 
   # shift time_start and time_end by time_ref
   time_start = time_start - time_ref
@@ -418,12 +457,12 @@ def main():
   #      6*h*w*zDim*4 bytes
   #
   # bandwidth = (((wvlts-1) * 4)/time_send) MBS
-  wvlts = 6*height*width*zDim
+  wvlts = 6 * height * width * zDim
   min_time_start = time_start.min()
   max_time_end = time_end.max()
   cycles_send = max_time_end - min_time_start
-  time_send = (cycles_send / 0.85) *1.e-3
-  bandwidth = ((wvlts * 4)/time_send)
+  time_send = (cycles_send / 0.85) * 1.0e-3
+  bandwidth = (wvlts * 4) / time_send
   print(f"cycles_send = {cycles_send} cycles")
   print(f"time_send = {time_send} us")
   print(f"bandwidth = {bandwidth} MB/S ")
@@ -431,8 +470,9 @@ def main():
   z = y_ref.ravel() - y_wse.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
-  np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)
+  np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.0e-5)
   print("\nSUCCESS!")
+
 
 if __name__ == "__main__":
   main()

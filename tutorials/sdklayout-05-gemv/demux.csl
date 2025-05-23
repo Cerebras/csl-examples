@@ -1,0 +1,65 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param size: u16;
+param in_color: color;
+param out_color: color;
+param entry_point: u16;
+param has_sentinel: u16;
+
+const ctrl = @import_module("<control>");
+
+const input_q = @get_input_queue(0);
+const output_q = @get_output_queue(0);
+
+const inDSD = @get_dsd(fabin_dsd, .{.extent = size,
+                                    .fabric_color = in_color,
+                                    .input_queue = input_q});
+
+const outDSD = @get_dsd(fabout_dsd, .{.extent = size,
+                                      .fabric_color = out_color,
+                                      .output_queue = output_q});
+
+const ctrlOurDSD = @get_dsd(fabout_dsd, .{.extent = 1,
+                                          .fabric_color = out_color,
+                                          .output_queue = output_q,
+                                          .control = true});
+
+const main_id = @get_local_task_id(8);
+task main() void {
+  @mov32(outDSD, inDSD, .{.async = true, .activate = send_sentinel});
+}
+
+// This task will optionally send a control wavelet.
+// This is needed by the 'x' vector to signal the gemv PEs
+// that the partial A*x result has been computed and the
+// 'b' vector can now be added to it.
+const ctrl_entry_pt = @get_control_task_id(entry_point);
+const send_sentinel_id = @get_local_task_id(9);
+task send_sentinel() void {
+  if (has_sentinel > 0) {
+    @mov32(ctrlOurDSD, ctrl.encode_control_task_payload(ctrl_entry_pt));
+  }
+}
+
+comptime {
+  @bind_local_task(main, main_id);
+  @bind_local_task(send_sentinel, send_sentinel_id);
+  @activate(main_id);
+
+  @initialize_queue(input_q, .{.color = in_color});
+  if (@is_arch("wse3")) {
+    @initialize_queue(output_q, .{.color = out_color});
+  }
+}

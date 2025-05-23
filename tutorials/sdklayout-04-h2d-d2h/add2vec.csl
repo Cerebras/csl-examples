@@ -1,0 +1,57 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param size: u16;
+param rx1: color;
+param rx2: color;
+param tx: color;
+
+const in_q1 = @get_input_queue(0);
+const in_q2 = @get_input_queue(1);
+const out_q = @get_output_queue(0);
+
+const input1 = @get_dsd(fabin_dsd, .{.extent = size,
+                                     .fabric_color = rx1,
+                                     .input_queue = in_q1});
+
+const input2 = @get_dsd(fabin_dsd, .{.extent = size,
+                                     .fabric_color = rx2,
+                                     .input_queue = in_q2});
+
+const output = @get_dsd(fabout_dsd, .{.extent = size,
+                                      .fabric_color = tx,
+                                      .output_queue = out_q});
+
+// WSE3 does not allow multiple fabric inputs per DSD operation.
+// Therefore, we introduce a FIFO for portability between WSE2
+// and WSE3.
+var buffer: [size]u16;
+const fifo = @allocate_fifo(buffer);
+const main_id = @get_local_task_id(8);
+task main() void {
+  @mov16(fifo, input2, .{.async = true});
+  @add16(output, input1, fifo, .{.async = true});
+}
+
+comptime {
+  @bind_local_task(main, main_id);
+  @activate(main_id);
+
+  @initialize_queue(in_q1, .{.color = rx1});
+  @initialize_queue(in_q2, .{.color = rx2});
+
+  if (@is_arch("wse3")) {
+    @initialize_queue(out_q, .{.color = tx});
+  }
+}

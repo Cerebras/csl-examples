@@ -2,13 +2,13 @@ BiCGSTAB
 ========
 
 This example evaluates the performance of BiCGSTAB with a sparse matrix ``A``
-built by 7-point stencil. The kernel records the ``start`` and ``end`` of 
+built by 7-point stencil. The kernel records the ``start`` and ``end`` of
 BiCGSTAB by tsc counter. In addition the tsc counters of all PEs are not
 synchronized in the beginning. To avoid the timing variation among those PEs,
 ``sync()`` synchronizes all PEs and samples the reference clock.
 
 There are two implementations, ``kernel.csl`` and ``kernel_bicgstab.csl``
-compiled by ``run.py`` and ``run_bicgstab.py`` respectively. Both kernels
+compiled by ``run.py`` and ``device_run.py`` respectively. Both kernels
 define host-callable functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in
 order to synchronize the PEs and record the timing.
 
@@ -22,10 +22,10 @@ implement BiCGSTAB algorithm, including
 
 - others: update ``x``, ``p``, ``r``, ``v``, ``s`` and ``t``
 
-The kernel ``kernel_bicgstab.csl`` defines a host-callable function ``f_bicgstab``
-which implements the BiCGSTAB on the WSE. The ``f_bicgstab`` introduces a state
-machine to call a sequence of ``spmv()``, ``dot()`` and others. Such state machine
-simply realizes the algorithm in ``run.py``.
+The kernel ``kernel_bicgstab.csl`` defines a host-callable function
+``f_bicgstab`` which implements the BiCGSTAB on the WSE. The ``f_bicgstab``
+introduces a state machine to call a sequence of ``spmv()``, ``dot()`` and
+others. Such state machine simply realizes the algorithm in ``run.py``.
 
 The kernel ``allreduce/pe.csl`` performs a reduction over the whole rectangle
 to synchronize the PEs, then the bottom-right PE sends a signal to other PEs
@@ -37,7 +37,7 @@ coefficients can vary per PE, but must be the same for the local vector. The
 user can change the coefficients based on the boundary condition or curvilinear
 coordinate transformation.
 
-The script ``run.py`` or ``run_bicgstab.py`` has the following parameters:
+The script ``run.py`` or ``device_run.py`` has the following parameters:
 
 - ``-k=<int>`` specifies the maximum size of local vector.
 

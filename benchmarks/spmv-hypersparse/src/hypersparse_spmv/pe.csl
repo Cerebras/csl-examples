@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -124,20 +124,6 @@ fn get_y_coord() u16 {
 const timestamp = @import_module("<time>");
 var tsc_reduce_start_buffer = @zeros([timestamp.tsc_size_words]u16);
 var tsc_reduce_end_buffer = @zeros([timestamp.tsc_size_words]u16);
-
-// These magical addresses from the ISA are in words, and we need bytes, so we
-// multiply by 2.
-// for UT priority
-const ce_inpq0_cfg: u16 = 0x7F58 * 2;
-const ce_inpq1_cfg: u16 = 0x7F59 * 2;
-const ce_inpq2_cfg: u16 = 0x7F5A * 2;
-const ce_inpq3_cfg: u16 = 0x7F5B * 2;
-const ce_inpq4_cfg: u16 = 0x7F5C * 2;
-const ce_inpq5_cfg: u16 = 0x7F5D * 2;
-const ce_inpq6_cfg: u16 = 0x7F5E * 2;
-const ce_inpq7_cfg: u16 = 0x7F5F * 2;
-const UT_MED_PRI: u16 = 0x100;  // bit 8
-const UT_HI_PRI: u16 = 0x200;   // bit 9
 
 // for task priority
 // const task_pri_cfg: u16 = 0x7E09 * 2;
@@ -685,8 +671,7 @@ fn tx_north_done() void {
         } else {
             @load_to_dsr(tx_north_dsr, tx_north_ctrl_rst_dsd, .{ .async = true, .activate = tx_north_task });
             @load_to_dsr(mem1d_north_dsr, ctrl_rst_dsd);
-            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
-            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;  
+            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true, .priority = .{ .high = true }});
         }
     } else {
         // tx is started only after rx is done
@@ -707,14 +692,13 @@ fn tx_south_done() void {
         } else {
             @load_to_dsr(tx_south_dsr, tx_south_ctrl_rst_dsd, .{ .async = true, .activate = tx_south_task });
             @load_to_dsr(mem1d_south_dsr, ctrl_rst_dsd);
-            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
-            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true, .priority = .{ .high = true }});
         }
     } else {
         // tx is started only after rx is done
         if (is_compute_south_done) {
             is_south_train_running = false;
-            compute_done(); 
+            compute_done();
        }
    }
 }
@@ -984,14 +968,13 @@ task rx_north_task() void {
         @load_to_dsr(rx_north_dsr, rx_north_dsd, .{ .async = true, .activate = curr_rx_north_done_task } );
         if (curr_rx_north_buf == 0) {
             @load_to_dsr(mem1d_rx_north_dsr, south_buf0_dsd);
-            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true });
+            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             @load_to_dsr(mem1d_rx_north_dsr, south_buf1_dsd);
-            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true });
+            @mov32(mem1d_rx_north_dsr, rx_north_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-    	// set queue to be higher priority than MT
-    	// input queue config for UT0
-        @bitcast(*u16, ce_inpq0_cfg).* |= UT_MED_PRI;
+        // set queue to be higher priority than MT
+        // input queue config for UT0
     } else {
         // wait until avail
         @activate(rx_north);
@@ -1013,12 +996,11 @@ task rx_south_task() void {
         @load_to_dsr(rx_south_dsr, rx_south_dsd, .{ .async = true, .activate = curr_rx_south_done_task });
         if (curr_rx_south_buf == 0) {
             @load_to_dsr(mem1d_rx_south_dsr, north_buf0_dsd);
-            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true });
+            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             @load_to_dsr(mem1d_rx_south_dsr, north_buf1_dsd);
-            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true });
+            @mov32(mem1d_rx_south_dsr, rx_south_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-	    @bitcast(*u16, ce_inpq1_cfg).* |= UT_MED_PRI;
     } else {
         // wait until available
         @activate(rx_south);
@@ -1042,12 +1024,11 @@ task rx_east_task() void {
             @load_to_dsr(rx_east_dsr, rx_east_dsd, .{ .async = true, .activate = rx_east_task });
             if (curr_rx_east_buf == 0) {
                 @load_to_dsr(mem1d_rx_east_dsr, y_rx_east_buf0_len_dsd);
-                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
             } else {
                 @load_to_dsr(mem1d_rx_east_dsr, y_rx_east_buf1_len_dsd);
-                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+                @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
             }
-	        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
         } else {
             // buffer is not avail to rx next coach, try again
             @activate(rx_east);
@@ -1063,7 +1044,7 @@ task rx_east_task() void {
             const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf0_len[0]);
             @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
             @load_to_dsr(mem1d_rx_east_dsr, y_rows_west_buf0_dsd);
-            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             if (rx_east_buf1_len[0] == 0) {
                 @activate(rx_east);
@@ -1072,9 +1053,8 @@ task rx_east_task() void {
             const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf1_len[0]);
             @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
             @load_to_dsr(mem1d_rx_east_dsr, y_rows_west_buf1_dsd);
-            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            @mov16(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
     } else if (rx_east_task_state == 2) {
         rx_east_task_state = 3;
         // segment 3: rx values data, terminated by eos
@@ -1086,7 +1066,7 @@ task rx_east_task() void {
             const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf0_len[0]);
             @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
             @load_to_dsr(mem1d_rx_east_dsr, y_vals_west_buf0_dsd);
-            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             if (rx_east_buf1_len[0] == 0) {
                 @activate(rx_east);
@@ -1095,9 +1075,8 @@ task rx_east_task() void {
             const rx_east_data_dsd = @set_dsd_length(rx_east_dsd, rx_east_buf1_len[0]);
             @load_to_dsr(rx_east_dsr, rx_east_data_dsd, .{ .async = true, .activate = rx_east_task });
             @load_to_dsr(mem1d_rx_east_dsr, y_vals_west_buf1_dsd);
-            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true });
+            @mov32(mem1d_rx_east_dsr, rx_east_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-        @bitcast(*u16, ce_inpq7_cfg).* |= UT_MED_PRI;
     } else if (rx_east_task_state == 3) {
         rx_east_task_state = 0;     // reset state
         // rx has completed
@@ -1141,12 +1120,11 @@ task rx_west_task() void {
             @load_to_dsr(rx_west_dsr, rx_west_dsd, .{ .async = true, .activate = rx_west_task });
             if (curr_rx_west_buf == 0) {
                 @load_to_dsr(mem1d_rx_west_dsr, y_rx_west_buf0_len_dsd);
-                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
             } else {
                 @load_to_dsr(mem1d_rx_west_dsr, y_rx_west_buf1_len_dsd);
-                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+                @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
             }
-            @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
         } else {
             // buffer is not avail for rx next coach, try again
             @activate(rx_west);
@@ -1162,7 +1140,7 @@ task rx_west_task() void {
             const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf0_len[0]);
             @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
             @load_to_dsr(mem1d_rx_west_dsr, y_rows_east_buf0_dsd);
-            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             if (rx_west_buf1_len[0] == 0) {
                 @activate(rx_west);
@@ -1171,9 +1149,8 @@ task rx_west_task() void {
             const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf1_len[0]);
             @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
             @load_to_dsr(mem1d_rx_west_dsr, y_rows_east_buf1_dsd);
-            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            @mov16(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-        @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
     } else if (rx_west_task_state == 2) {
         rx_west_task_state = 3;
         // segment 3: rx values data, terminated by eos
@@ -1185,7 +1162,7 @@ task rx_west_task() void {
             const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf0_len[0]);
             @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
             @load_to_dsr(mem1d_rx_west_dsr, y_vals_east_buf0_dsd);
-            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
         } else {
             if (rx_west_buf1_len[0] == 0) {
                 @activate(rx_west);
@@ -1194,9 +1171,8 @@ task rx_west_task() void {
             const rx_west_data_dsd = @set_dsd_length(rx_west_dsd, rx_west_buf1_len[0]);
             @load_to_dsr(rx_west_dsr, rx_west_data_dsd, .{ .async = true, .activate = rx_west_task });
             @load_to_dsr(mem1d_rx_west_dsr, y_vals_east_buf1_dsd);
-            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true });
+            @mov32(mem1d_rx_west_dsr, rx_west_dsr, .{ .async = true, .priority = .{ .medium = true }});
         }
-        @bitcast(*u16, ce_inpq6_cfg).* |= UT_MED_PRI;
     } else if (rx_west_task_state == 3) {
         rx_west_task_state = 0;     // reset state
         // rx has completed
@@ -1238,8 +1214,7 @@ task tx_north_task() void {
         tx_north_task_state = 1;
         @load_to_dsr(tx_north_dsr, tx_north_dsd, .{ .async = true, .activate = tx_north_task });
         @load_to_dsr(mem1d_north_dsr, x_tx_buf_dsd);
-        @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
-        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
+        @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true, .priority = .{ .high = true }});
     } else if (tx_north_task_state == 1) {
         // tx north uthread has finished, send out two advance commands for next PE
         tx_north_task_state = 2;
@@ -1249,9 +1224,8 @@ task tx_north_task() void {
         } else {
             @load_to_dsr(tx_north_dsr, tx_north_ctrl_adv_dsd, .{ .async = true, .activate = tx_north_task });
             @load_to_dsr(mem1d_north_dsr, ctrl_adv_dsd);
-            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true });
-            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;  
-    	}
+            @mov32(tx_north_dsr, mem1d_north_dsr, .{ .async = true, .priority = .{ .high = true }});
+        }
     } else if (tx_north_task_state == 2) {
         tx_north_task_state = 0;    // reset
         // tx north uthread has finished
@@ -1274,8 +1248,7 @@ task tx_south_task() void {
         tx_south_task_state = 1;
         @load_to_dsr(tx_south_dsr, tx_south_dsd, .{ .async = true, .activate = tx_south_task });
         @load_to_dsr(mem1d_south_dsr, x_tx_buf_dsd);
-        @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
-        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+        @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true, .priority = .{ .high = true }});
     } else if (tx_south_task_state == 1) {
         // tx south uthread has finished, send out reset command to put the switch into steady state
         tx_south_task_state = 2;
@@ -1285,8 +1258,7 @@ task tx_south_task() void {
         } else {
             @load_to_dsr(tx_south_dsr, tx_south_ctrl_adv_dsd, .{ .async = true, .activate = tx_south_task });
             @load_to_dsr(mem1d_south_dsr, ctrl_adv_dsd);
-            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true });
-            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
+            @mov32(tx_south_dsr, mem1d_south_dsr, .{ .async = true, .priority = .{ .high = true }});
         }
     } else if (tx_south_task_state == 2) {
         tx_south_task_state = 0;    // reset
@@ -1315,12 +1287,11 @@ task tx_west_task() void {
             @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
             if (curr_tx_west_buf == 0) {
                 @load_to_dsr(mem1d_west_dsr, y_tx_west_buf0_len_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 @load_to_dsr(mem1d_west_dsr, y_tx_west_buf1_len_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
-            @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
         } else {
             // curr tx west buf not ready for tx, try again
             @activate(tx_west);
@@ -1338,12 +1309,12 @@ task tx_west_task() void {
                 const y_rows_west_dsd = @set_dsd_length(y_rows_west_buf0_dsd, tx_west_buf0_len[0]);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_rows_west_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_west_buf0_dsd, tx_west_buf0_len[0]), tx_west_buf_off[0], u16);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         } else {
             if (tx_west_buf1_len[0] == 0) {
@@ -1354,15 +1325,14 @@ task tx_west_task() void {
                 const y_rows_west_dsd = @set_dsd_length(y_rows_west_buf1_dsd, tx_west_buf1_len[0]);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_rows_west_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_west_buf1_dsd, tx_west_buf1_len[0]), tx_west_buf_off[1], u16);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_rows_west_dsd);
-                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov16(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         }
-        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
     } else if (tx_west_task_state == 2) {
         tx_west_task_state = 4;
         // segment 3: send vals data
@@ -1375,12 +1345,12 @@ task tx_west_task() void {
                 const y_vals_west_dsd = @set_dsd_length(y_vals_west_buf0_dsd, tx_west_buf0_len[0]);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
-                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_vals_west_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_west_buf0_dsd, tx_west_buf0_len[0]), tx_west_buf_off[0], f32);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
-                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         } else {
             if (tx_west_buf1_len[0] == 0) {
@@ -1391,15 +1361,14 @@ task tx_west_task() void {
                 const y_vals_west_dsd = @set_dsd_length(y_vals_west_buf1_dsd, tx_west_buf1_len[0]);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
-                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_vals_west_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_west_buf1_dsd, tx_west_buf1_len[0]), tx_west_buf_off[1], f32);
                 @load_to_dsr(tx_west_dsr, tx_west_dsd, .{ .async = true, .activate = tx_west_task });
                 @load_to_dsr(mem1d_west_dsr, y_vals_west_dsd);
-                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true });
+                @mov32(tx_west_dsr, mem1d_west_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         }
-        @bitcast(*u16, ce_inpq2_cfg).* |= UT_HI_PRI;
     } else if (tx_west_task_state == 4) {
         tx_west_task_state = 0; // reset tx state
         // current tx west has completed
@@ -1414,7 +1383,7 @@ task tx_west_task() void {
 
         // flip the curr tx west buf
         curr_tx_west_buf = 1 - curr_tx_west_buf;
-    
+
         // start next tx incase there is more (tx_west_count > 0)
         @activate(tx_west);
     }
@@ -1438,12 +1407,11 @@ task tx_east_task() void {
             @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
             if (curr_tx_east_buf == 0) {
                 @load_to_dsr(mem1d_east_dsr, y_tx_east_buf0_len_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 @load_to_dsr(mem1d_east_dsr, y_tx_east_buf1_len_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
-            @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
         } else {
             // curr tx east buf is not ready, try again
             @activate(tx_east);
@@ -1461,12 +1429,12 @@ task tx_east_task() void {
                 const y_rows_east_dsd = @set_dsd_length(y_rows_east_buf0_dsd, tx_east_buf0_len[0]);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_rows_east_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_east_buf0_dsd, tx_east_buf0_len[0]), tx_east_buf_off[0], u16);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         } else {
             if (tx_east_buf1_len[0] == 0) {
@@ -1477,15 +1445,14 @@ task tx_east_task() void {
                 const y_rows_east_dsd = @set_dsd_length(y_rows_east_buf1_dsd, tx_east_buf1_len[0]);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_rows_east_dsd = @increment_dsd_offset(@set_dsd_length(y_rows_east_buf1_dsd, tx_east_buf1_len[0]), tx_east_buf_off[1], u16);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_rows_east_dsd);
-                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov16(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         }
-        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
     } else if (tx_east_task_state == 2) {
         tx_east_task_state = 4;
         // segment 2: send vals data
@@ -1498,12 +1465,12 @@ task tx_east_task() void {
                 const y_vals_east_dsd = @set_dsd_length(y_vals_east_buf0_dsd, tx_east_buf0_len[0]);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
-                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_vals_east_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_east_buf0_dsd, tx_east_buf0_len[0]), tx_east_buf_off[0], f32);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
-                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         } else {
             if (tx_east_buf1_len[0] == 0) {
@@ -1514,15 +1481,14 @@ task tx_east_task() void {
                 const y_vals_east_dsd = @set_dsd_length(y_vals_east_buf1_dsd, tx_east_buf1_len[0]);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
-                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             } else {
                 const y_vals_east_dsd = @increment_dsd_offset(@set_dsd_length(y_vals_east_buf1_dsd, tx_east_buf1_len[0]), tx_east_buf_off[1], f32);
                 @load_to_dsr(tx_east_dsr, tx_east_dsd, .{ .async = true, .activate = tx_east_task });
                 @load_to_dsr(mem1d_east_dsr, y_vals_east_dsd);
-                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true });
+                @mov32(tx_east_dsr, mem1d_east_dsr, .{ .async = true, .priority = .{ .high = true }});
             }
         }
-        @bitcast(*u16, ce_inpq3_cfg).* |= UT_HI_PRI;
     } else if (tx_east_task_state == 4) {
         tx_east_task_state = 0; // reset tx state
         // current tx east has completed
@@ -1537,7 +1503,7 @@ task tx_east_task() void {
 
         // flip the curr tx east buf
         curr_tx_east_buf = 1 - curr_tx_east_buf;
-    
+
         // start next tx incase there is more (tx_east_count > 0)
         @activate(tx_east);
     }
@@ -1649,7 +1615,7 @@ task compute_south_task() void {
         rx_north_buf_free[curr_rx_north_compute_buf] = true;
         // and flip to next buffer as curr_rx_south_buf
         curr_rx_north_compute_buf = 1 - curr_rx_north_compute_buf;
-    }    
+    }
     // start next compute
     @activate(compute_south);
 } // compute_north_task()
@@ -1816,7 +1782,7 @@ task init_task() void {
     // starts with the last row PE sending out its data, followed by ctrl to switch router on PE above.
     // All PEs receive the data in the same order: from prows - 1, prows - 2, prows - 3 ... until 1.
     // Top two PEs do not need to send out any ctrl, and the first row PE never needs to switch.
-    
+
     // debug: uncomment to disable north train
     // rx_south_count = 0;
     // tx_north_count = 0;
@@ -1826,7 +1792,7 @@ task init_task() void {
     @activate(rx_south);
 
     // start the south-moving train
-    
+
     // debug: uncomment to disable south train
     // rx_north_count = 0;
     // tx_south_count = 0;

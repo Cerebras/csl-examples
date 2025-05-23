@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,14 +23,14 @@ const memcpy = @import_module("<memcpy/get_params>", .{
 });
 
 layout {
-  @set_rectangle(width, height); 
+  @set_rectangle(width, height);
 
   for (@range(u16, width)) |px| {
     const memcpy_params = memcpy.get_params(px);
     for (@range(u16, height)) |py| {
       @set_tile_code(px, py, "pe_matvec.csl", .{ .memcpy_params = memcpy_params,
-        .nb = tile_size, .iters = iters}); 
-    }   
+        .nb = tile_size, .iters = iters});
+    }
   }
 
   // export symbol names

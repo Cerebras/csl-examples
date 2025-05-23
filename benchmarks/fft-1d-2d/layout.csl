@@ -1,0 +1,69 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+param DIM: i16;  // FFT dimension: 1 == 1D, 2 == 2D
+param Nz: i16;   // Input vector size
+param FP: i16;   // Precision: 1 == float16, 2 == float32
+
+const WIDTH: i16 = if (DIM == 1) 1 else Nz;
+const HEIGHT: i16 = 1;
+const Nx = WIDTH;
+const Ny = HEIGHT;
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = WIDTH,
+    .height = HEIGHT
+});
+
+layout {
+  // Verify validity of parameters
+  @comptime_assert(DIM == 1 or DIM == 2); // only 1D and 2D supported
+  @comptime_assert((DIM == 1 and Nz >= 2) or (DIM == 2 and Nz >= 4));
+  @comptime_assert(Nz & (Nz-1) == 0); // Nz must be a power of 2
+  @comptime_assert(FP == 1 or FP == 2);
+  @comptime_assert(FP == 1 or DIM == 1); // DIM == 2 does not support FP2
+
+  var tensor_type: type = if (FP == 1)f16 else f32;
+
+  @set_rectangle(WIDTH, HEIGHT);
+
+  if (WIDTH > 1) {
+    // A row of PEs for 2D FFT
+    var idx: i16 = 0;
+    var idx0: i16 = 0;
+    var idxW: i16 = 0;
+    for (@zeros([WIDTH]u8)) |_, Px| {
+      const memcpyParams = memcpy.get_params(Px);
+      idx = Px;
+      idx0 = Px;
+      idxW = Px;
+      if (idx == 0) {
+        idx0 = 1;
+      }
+      if (idx == WIDTH-1) {
+        idxW = 1;
+      }
+      @set_tile_code(idx, 0, "ucode_2d.csl",.{.Nz=Nz, .Nx=Nx, .Ny=Ny, .HEIGHT=HEIGHT, .WIDTH=WIDTH, .FP=FP, .tensor_type=tensor_type, .PE_X=idx, .PE_X0=idx0, .PE_XW=idxW, .memcpyParams = memcpyParams, });
+    }
+  } else {
+    const memcpyParams = memcpy.get_params(0);
+    // Single Tile for 1D FFT
+    @set_tile_code(0, 0, "ucode_1d.csl",.{.N=Nz, .FP=FP, .tensor_type=tensor_type, .memcpyParams = memcpyParams,});
+  }
+
+  @export_name("X", [*]tensor_type, true);
+  @export_name("f_twiddle", [*]tensor_type, true);
+  @export_name("f_fft", fn()void);
+  @export_name("f_ifft", fn()void);
+}

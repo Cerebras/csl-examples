@@ -1,16 +1,16 @@
 Conjugate Gradient
 ==================
 
-This example evaluates the performance of Conjugate Gradient (CG) with a 
+This example evaluates the performance of Conjugate Gradient (CG) with a
 sparse matrix ``A`` built by 7-point stencil. The kernel records the ``start``
 and ``end`` of CG by tsc counter. In addition the tsc counters of all PEs are
 not synchronized in the beginning. To avoid the timing variation among those
 PEs, ``sync()`` synchronizes all PEs and samples the reference clock.
 
 There are two implementations, ``kernel.csl`` and ``kernel_cg.csl`` compiled
-by ``run.py`` and ``run_cg.py`` respectively. Both kernels define host-callable
-functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order to synchronize the
-PEs and record the timing.
+by ``run.py`` and ``device_run.py`` respectively. Both kernels define
+host-callable functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order to
+synchronize the PEs and record the timing.
 
 The kernel ``kernel.csl`` also defines a couple of host-callable functions to
 implement CG algorithm, including
@@ -36,7 +36,7 @@ coefficients can vary per PE, but must be the same for the local vector. The
 user can change the coefficients based on the boundary condition or curvilinear
 coordinate transformation.
 
-The script ``run.py`` or ``run_cg.py`` has the following parameters:
+The script ``run.py`` or ``device_run.py`` has the following parameters:
 
 - ``-k=<int>`` specifies the maximum size of local vector.
 

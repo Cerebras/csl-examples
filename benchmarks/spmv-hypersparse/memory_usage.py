@@ -1,4 +1,4 @@
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +15,24 @@
 import numpy as np
 
 
-def memory_per_pe(max_local_nnz, max_local_nnz_cols, max_local_nnz_rows, local_in_vec_sz, local_out_vec_sz):
-    '''
+def memory_per_pe(
+    max_local_nnz,
+    max_local_nnz_cols,
+    max_local_nnz_rows,
+    local_in_vec_sz,
+    local_out_vec_sz,
+):
+  """
     // input matrix
     var mat_vals_buf = @zeros([max_local_nnz]f32);      // in matrix values (sparse): 4B
     var mat_rows_buf = @zeros([max_local_nnz]u16);      // in matrix relative row offsets: 2B
-                                                    // need this in preprocessing: 2B
-    var mat_col_idx_buf = @zeros([max_local_nnz_cols]u16);   // column idx of nnz cols (max possible size is nnz)
-    var mat_col_loc_buf = @zeros([max_local_nnz_cols]u16);   // col location in mat_vals_buf and mat_rows_buf (max nnz)
-    var mat_col_len_buf = @zeros([max_local_nnz_cols]u16);   // col length (nnz rows in a col)
+                                                        // need this in preprocessing: 2B
+    // column idx of nnz cols (max possible size is nnz)
+    var mat_col_idx_buf = @zeros([max_local_nnz_cols]u16);
+    // col location in mat_vals_buf and mat_rows_buf (max nnz)
+    var mat_col_loc_buf = @zeros([max_local_nnz_cols]u16);
+    // col length (nnz rows in a col)
+    var mat_col_len_buf = @zeros([max_local_nnz_cols]u16);
 
     // input vector: for north-going and south-going trains
     // buffer storing data for tx
@@ -35,7 +44,7 @@ def memory_per_pe(max_local_nnz, max_local_nnz_cols, max_local_nnz_rows, local_i
     var x_south_buf1 = @zeros([local_vec_sz]f32);   // in vector values (dense): 4B
 
     // precomputed output vector (sparse format) local rows index information
-    var y_rows_init_buf = @zeros([max_local_nnz_rows]u16);       // init -- this should not be modified
+    var y_rows_init_buf = @zeros([max_local_nnz_rows]u16);        // init -- should not be modified
 
     // output vector (sparse): to store partial computed output vectors for north and south trains
     var y_vals_north_buf = @zeros([max_local_nnz_rows]f32);       // 4B
@@ -44,26 +53,30 @@ def memory_per_pe(max_local_nnz, max_local_nnz_cols, max_local_nnz_rows, local_i
     var y_rows_south_buf = @zeros([max_local_nnz_rows]u16);       // 2B
 
     // buffers for east and west trains
-    var y_vals_west_buf = @zeros([max_local_nnz_rows]f32);    // rx/tx vals on west-train during reduction (sparse): 4B
-    var y_rows_west_buf = @zeros([max_local_nnz_rows]u16);    // rx/tx rows on west-train during reduction (sparse): 4B
-    var y_vals_east_buf = @zeros([max_local_nnz_rows]f32);    // rx/tx vals on east-train during reduction (sparse): 4B
-    var y_rows_east_buf = @zeros([max_local_nnz_rows]u16);    // rx/tx rows on east-train during reduction (sparse): 4B
+    // rx/tx vals on west-train during reduction (sparse): 4B
+    var y_vals_west_buf = @zeros([max_local_nnz_rows]f32);
+    // rx/tx rows on west-train during reduction (sparse): 4B
+    var y_rows_west_buf = @zeros([max_local_nnz_rows]u16);
+    // rx/tx vals on east-train during reduction (sparse): 4B
+    var y_vals_east_buf = @zeros([max_local_nnz_rows]f32);
+    // rx/tx rows on east-train during reduction (sparse): 4B
+    var y_rows_east_buf = @zeros([max_local_nnz_rows]u16);
 
     // final reduced local output vector (dense)
     var y_local_buf = @zeros([local_out_vec_sz]f32);    // 4B
-    '''
-    
-    dtsz_u16 = np.uint16().itemsize     ## 2 bytes
-    dtsz_f32 = np.float32().itemsize    ## 4 bytes
-    
-    ## input matrix in sparse format
-    in_mat_mem = (dtsz_f32 + dtsz_u16) * max_local_nnz + 3 * dtsz_u16 * max_local_nnz_cols
-    ## input vector in dense format
-    in_vec_mem = 5 * dtsz_f32 * local_in_vec_sz                    ## 4 buffers + 1 tx
-    ## partial output vector in sparse format
-    sp_vec_init_mem = dtsz_u16 * max_local_nnz_rows ## init/precomputed rows data
-    sp_vec_mem = 4 * ((dtsz_f32 + dtsz_u16) * max_local_nnz_rows)  ## 4 sets of buffers
-    ## output vector in dense format
-    out_vec_mem = dtsz_f32 * local_out_vec_sz
-    
-    return in_mat_mem + in_vec_mem + sp_vec_init_mem + sp_vec_mem + out_vec_mem
+    """
+
+  dtsz_u16 = np.dtype(np.uint16).itemsize  ## 2 bytes
+  dtsz_f32 = np.dtype(np.float32).itemsize  ## 4 bytes
+
+  ## input matrix in sparse format
+  in_mat_mem = (dtsz_f32 + dtsz_u16) * max_local_nnz + 3 * dtsz_u16 * max_local_nnz_cols
+  ## input vector in dense format
+  in_vec_mem = 5 * dtsz_f32 * local_in_vec_sz  ## 4 buffers + 1 tx
+  ## partial output vector in sparse format
+  sp_vec_init_mem = dtsz_u16 * max_local_nnz_rows  ## init/precomputed rows data
+  sp_vec_mem = 4 * ((dtsz_f32 + dtsz_u16) * max_local_nnz_rows)  ## 4 sets of buffers
+  ## output vector in dense format
+  out_vec_mem = dtsz_f32 * local_out_vec_sz
+
+  return in_mat_mem + in_vec_mem + sp_vec_init_mem + sp_vec_mem + out_vec_mem

@@ -39,6 +39,8 @@ There are an additional 15 tutorial examples which illustrate
 specific language features,
 and 3 tutorial examples which build an increasingly complex
 pipelined computation.
+There are also a series of five tutorials which introduce the new ``SdkLayout``
+API for program layout specification, which is in beta.
 
 Benchmarks
 ----------
@@ -100,9 +102,9 @@ Branches
 
 For each release of the SDK, there is a corresponding release tag in this
 repository which contains a version of the CSL examples which are compatible
-with that SDK release. For example, the tag ``rel-sdk-1.3.0`` in this
+with that SDK release. For example, the tag ``rel-sdk-1.4.0`` in this
 repository contains a version of the CSL examples which will work (compile and
-simulate) with the SDK 1.3.0 release. The ``master`` branch is identical to the
+simulate) with the SDK 1.4.0 release. The ``master`` branch is identical to the
 newest release.
 
 Full backward compatibility of the SDK is not guaranteed.
@@ -118,4 +120,4 @@ End User License Agreement
 --------------------------
 
 The End User Software License Agreement (EULA) is available
-`here <https://cerebras.net/wp-content/uploads/2021/10/cerebras-software-eula.pdf>`_.
+`here <https://cdn.sanity.io/files/e4qjo92p/production/410b46f67f593b2cbf2cf151f4ba6e0b8a857e93.pdf>`_.

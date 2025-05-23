@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,41 +15,37 @@
 # limitations under the License.
 
 
-import subprocess
 import argparse
+import subprocess
 
 
 def parse_args():
-  """ parse the command line """
+  """parse the command line"""
 
   parser = argparse.ArgumentParser(description="Sweep single tile matvec size parameter")
-  parser.add_argument("--name", required=False, default="out",
-                      help="Prefix of ELF files")
-  parser.add_argument("--cmaddr", required=False, default="",
-                      help="IP:port for CS system")
-  parser.add_argument("--dims",
-                      help="Fabric and program dimension, i.e. <W>,<H>")
-  parser.add_argument("--iters", required=False, type=int, default=1,
-                      help="Number of iterations for each matvec")
+  parser.add_argument("--name", required=False, default="out", help="Prefix of ELF files")
+  parser.add_argument("--cmaddr", required=False, default="", help="IP:port for CS system")
+  parser.add_argument("--dims", help="Fabric and program dimension, i.e. <W>,<H>")
+  parser.add_argument(
+      "--iters",
+      required=False,
+      type=int,
+      default=1,
+      help="Number of iterations for each matvec",
+  )
 
   args = parser.parse_args()
 
   return args
 
 
-def cslc_compile(
-    width: int,
-    height: int,
-    tile_size: int,
-    iters: int,
-    name: str
-  ):
+def cslc_compile(width: int, height: int, tile_size: int, iters: int, name: str):
   """Generate ELFs for the layout"""
 
   args = []
-  args.append("cslc") # command
-  args.append(f"layout_matvec.csl") # file
-  args.append(f"--fabric-dims={width+7},{height+2}") # options
+  args.append("cslc")  # command
+  args.append("layout_matvec.csl")  # file
+  args.append(f"--fabric-dims={width+7},{height+2}")  # options
   args.append("--fabric-offsets=4,1")
   args.append(f"--params=width:{width},height:{height},tile_size:{tile_size},iters:{iters}")
 
@@ -60,10 +56,8 @@ def cslc_compile(
   print(f"subprocess.check_call(args = {args}")
   subprocess.check_call(args)
 
-def cs_run(
-    name: str,
-    cmaddr: str
-  ):
+
+def cs_run(name: str, cmaddr: str):
   """Run with cs_python"""
 
   args = []
@@ -74,22 +68,10 @@ def cs_run(
   subprocess.check_call(args)
 
 
-def compile_and_run(
-    width: int,
-    height: int,
-    tile_size: int,
-    iters: int,
-    name: str,
-    cmaddr: str
-  ):
+def compile_and_run(width: int, height: int, tile_size: int, iters: int, name: str, cmaddr: str):
   """Compile and run program."""
 
-  cslc_compile(
-    width,
-    height,
-    tile_size,
-    iters,
-    name)
+  cslc_compile(width, height, tile_size, iters, name)
 
   cs_run(name, cmaddr)
 
@@ -103,18 +85,12 @@ def main():
   width = int(w)
   height = int(h)
 
-  name = args.name # compilation output
+  name = args.name  # compilation output
   cmaddr = args.cmaddr
   iters = args.iters
 
-  for tile_size in range(10,101,10):
-    compile_and_run(
-      width,
-      height,
-      tile_size,
-      iters,
-      name,
-      cmaddr)
+  for tile_size in range(10, 101, 10):
+    compile_and_run(width, height, tile_size, iters, name, cmaddr)
 
 
 if __name__ == "__main__":

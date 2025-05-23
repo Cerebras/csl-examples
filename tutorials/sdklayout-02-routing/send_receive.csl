@@ -1,0 +1,68 @@
+// Copyright 2025 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Select sender (0) or receiver (1)
+param select: u16;
+param c: color;
+
+const in_q = @get_input_queue(0);
+const out_q = @get_output_queue(1);
+
+const mode = enum(u16) {send = 0, receive = 1};
+
+// Buffer to be sent
+const size = 5;
+const data = [size]u16{1, 2, 3, 4, 5};
+
+// Buffer to receive data
+export var buffer: [size]u16;
+
+const dataDSD = @get_dsd(mem1d_dsd, .{.base_address = &data, .extent = size});
+const bufferDSD = @get_dsd(mem1d_dsd, .{.base_address = &buffer, .extent = size});
+
+const inDSD = @get_dsd(fabin_dsd, .{.extent = size, .fabric_color = c, .input_queue = in_q});
+const outDSD = @get_dsd(fabout_dsd, .{.extent = size, .fabric_color = c, .output_queue = out_q});
+
+// Sender task
+const send_task_id = @get_local_task_id(8);
+task send_task() void {
+    @mov16(outDSD, dataDSD, .{.async = true});
+}
+
+// Receiver task
+const receive_task_id = @get_local_task_id(9);
+task receive_task() void {
+    @mov16(bufferDSD, inDSD, .{.async = true});
+}
+
+const main_id = @get_local_task_id(10);
+task main() void {
+  // Select sender or receiver
+  switch(@as(mode, select)) {
+    mode.send => @activate(send_task_id),
+    mode.receive => @activate(receive_task_id)
+  }
+}
+
+comptime {
+  @bind_local_task(send_task, send_task_id);
+  @bind_local_task(receive_task, receive_task_id);
+  @bind_local_task(main, main_id);
+  @activate(main_id);
+
+  @initialize_queue(in_q, .{.color = c});
+  if (@is_arch("wse3")) {
+    @initialize_queue(out_q, .{.color = c});
+  }
+}

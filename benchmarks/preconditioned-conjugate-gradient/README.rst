@@ -5,15 +5,16 @@ This example evaluates the performance of Preconditioned Conjugate Gradient
 (PCG) with a sparse matrix ``A`` built by 7-point stencil. The kernel records
 the ``start`` and ``end`` of PCG by tsc counter. In addition the tsc counters
 of all PEs are not synchronized in the beginning. To avoid the timing variation
-among those PEs, ``sync()`` synchronizes all PEs and samples the reference clock.
+among those PEs, ``sync()`` synchronizes all PEs and samples the reference
+clock.
 
 The Jacobi preconditioner is adopted because it the simplest one for stencil.
 The coefficient of the center is the diagonal of the matrix ``A``.
 
 There are two implementations, ``kernel.csl`` and ``kernel_pcg.csl`` compiled
-by ``run.py`` and ``run_pcg.py`` respectively. Both kernels define host-callable
-functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order to synchronize the
-PEs and record the timing.
+by ``run.py`` and ``device_run.py`` respectively. Both kernels define
+host-callable functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order
+to synchronize the PEs and record the timing.
 
 The kernel ``kernel.csl`` also defines a couple of host-callable functions to
 implement CG algorithm, including
@@ -25,9 +26,9 @@ implement CG algorithm, including
 - others: update ``x``, ``p``, ``r`` and ``z``
 
 The kernel ``kernel_pcg.csl`` defines a host-callable function ``f_pcg`` which
-implements the PCG on the WSE. The ``f_pcg`` introduces a state machine to call a
-sequence of ``spmv()``, ``dot()`` and others. Such state machine simply realizes
-the algorithm in ``run.py``.
+implements the PCG on the WSE. The ``f_pcg`` introduces a state machine to call
+a sequence of ``spmv()``, ``dot()`` and others. Such state machine simply
+realizes the algorithm in ``run.py``.
 
 The kernel ``allreduce/pe.csl`` performs a reduction over the whole rectangle
 to synchronize the PEs, then the bottom-right PE sends a signal to other PEs
@@ -39,7 +40,7 @@ coefficients can vary per PE, but must be the same for the local vector. The
 user can change the coefficients based on the boundary condition or curvilinear
 coordinate transformation.
 
-The script ``run.py`` or ``run_pcg.py`` has the following parameters:
+The script ``run.py`` or ``device_run.py`` has the following parameters:
 
 - ``-k=<int>`` specifies the maximum size of local vector.
 

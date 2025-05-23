@@ -1,6 +1,6 @@
 #!/usr/bin/env cs_python
 
-# Copyright 2024 Cerebras Systems.
+# Copyright 2025 Cerebras Systems.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 # limitations under the License.
 
 # pylint: disable=too-many-function-args
-
 """ test Conjugate Gradient of a sparse matrix A built by 7-point stencil
 
   The following CG algorithm is adopted from algorithm 10.2.1 [1].
@@ -86,7 +85,7 @@
        toc()       // record end time
   ---
   This framework does transfer the nrm(r) back to host for each iteration of CG. So the
-  I/O pressure is high, not good for performance. The run_cg.py removes this IO pressure.
+  I/O pressure is high, not good for performance. device_run.py removes this IO pressure.
 
   The tic() samples "time_start" and toc() samples "time_end". The sync() samples
   "time_ref" which is used to shift "time_start" and "time_end".
@@ -111,29 +110,22 @@
       Johns Hopkins
 """
 
-
-import os
-from typing import Optional
-from pathlib import Path
+import random
 import shutil
 import subprocess
-import random
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
-from scipy.sparse.linalg import eigs
-
-from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
-
+from cg import conjugateGradient
 from cmd_parser import parse_args
+from scipy.sparse.linalg import eigs
+from util import csr_7_pt_stencil, hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
-from util import (
-    hwl_2_oned_colmajor,
-    oned_to_hwl_colmajor,
-    laplacian,
-    csr_7_pt_stencil,
+from cerebras.sdk.runtime.sdkruntimepybind import (  # pylint: disable=no-name-in-module
+    MemcpyDataType, MemcpyOrder, SdkRuntime,
 )
 
-from cg import conjugateGradient
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
@@ -142,14 +134,14 @@ def make_u48(words):
 def csl_compile_core(
     cslc: str,
     width: int,  # width of the core
-    height: int, # height of the core
+    height: int,  # height of the core
     pe_length: int,
     blockSize: int,
     file_config: str,
     elf_dir: str,
     fabric_width: int,
     fabric_height: int,
-    core_fabric_offset_x: int, # fabric-offsets of the core
+    core_fabric_offset_x: int,  # fabric-offsets of the core
     core_fabric_offset_y: int,
     use_precompile: bool,
     arch: Optional[str],
@@ -164,11 +156,11 @@ def csl_compile_core(
     C8: int,
     channels: int,
     width_west_buf: int,
-    width_east_buf: int
+    width_east_buf: int,
 ):
   if not use_precompile:
     args = []
-    args.append(cslc) # command
+    args.append(cslc)  # command
     args.append(file_config)
     args.append(f"--fabric-dims={fabric_width},{fabric_height}")
     args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
@@ -198,7 +190,7 @@ def csl_compile_core(
     print("\tuse pre-compile ELFs")
 
 
-def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
+def timing_analysis(height, width, time_memcpy_hwl, time_ref_hwl):
   # time_start = start time of spmv
   time_start = np.zeros((height, width)).astype(int)
   # time_end = end time of spmv
@@ -209,11 +201,11 @@ def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
       word[0] = time_memcpy_hwl[(h, w, 0)]
       word[1] = time_memcpy_hwl[(h, w, 1)]
       word[2] = time_memcpy_hwl[(h, w, 2)]
-      time_start[(h,w)] = make_u48(word)
+      time_start[(h, w)] = make_u48(word)
       word[0] = time_memcpy_hwl[(h, w, 3)]
       word[1] = time_memcpy_hwl[(h, w, 4)]
       word[2] = time_memcpy_hwl[(h, w, 5)]
-      time_end[(h,w)] = make_u48(word)
+      time_end[(h, w)] = make_u48(word)
 
   # time_ref = reference clock
   time_ref = np.zeros((height, width)).astype(int)
@@ -230,7 +222,7 @@ def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
   #     (h-1) - py + (w-1) - px
   for py in range(height):
     for px in range(width):
-      time_ref[(py, px)] = time_ref[(py, px)] - ((width+height-2)-(px + py))
+      time_ref[(py, px)] = time_ref[(py, px)] - ((width + height - 2) - (px + py))
 
   # shift time_start and time_end by time_ref
   time_start = time_start - time_ref
@@ -243,7 +235,7 @@ def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
   min_time_start = time_start.min()
   max_time_end = time_end.max()
   cycles_send = max_time_end - min_time_start
-  time_send = (cycles_send / 0.85) *1.e-3
+  time_send = (cycles_send / 0.85) * 1.0e-3
   print(f"cycles_send = {cycles_send} cycles")
   print(f"time_send = {time_send} us")
 
@@ -284,13 +276,15 @@ def main():
   blockSize = args.blockSize
   max_ite = args.max_ite
 
-  print(f"width = {width}, height = {height}, pe_length={pe_length}, zDim={zDim}, blockSize={blockSize}")
+  print(
+      f"width={width}, height={height}, pe_length={pe_length}, zDim={zDim}, blockSize={blockSize}"
+  )
   print(f"max_ite = {max_ite}")
   assert pe_length >= 2, "the maximum size of z must be greater than 1"
   assert zDim <= pe_length, "[0, zDim) cannot exceed the storage"
 
   np.random.seed(2)
-  x = np.arange(height*width*zDim).reshape(height, width, zDim).astype(np.float32) + 100
+  x = (np.arange(height * width * zDim).reshape(height, width, zDim).astype(np.float32) + 100)
 
   x_1d = hwl_2_oned_colmajor(height, width, zDim, x, np.float32)
   nrm2_x = np.linalg.norm(x_1d.ravel(), 2)
@@ -298,22 +292,22 @@ def main():
   x_1d = x_1d / nrm2_x
   x = x / nrm2_x
 
-  b = np.arange(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) + 1
+  b = (np.arange(height * width * pe_length).reshape(height, width, pe_length).astype(np.float32) +
+       1)
   b_1d = hwl_2_oned_colmajor(height, width, pe_length, b, np.float32)
 
   # stencil coefficients has the following order
   # {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
-  stencil_coeff = np.zeros((height, width, 7), dtype = np.float32)
+  stencil_coeff = np.zeros((height, width, 7), dtype=np.float32)
   for i in range(height):
     for j in range(width):
-      stencil_coeff[(i, j, 0)] = -1 # west
-      stencil_coeff[(i, j, 1)] = -1 # east
-      stencil_coeff[(i, j, 2)] = -1 # south
-      stencil_coeff[(i, j, 3)] = -1 # north
-      stencil_coeff[(i, j, 4)] = -1 # bottom
-      stencil_coeff[(i, j, 5)] = -1 # top
+      stencil_coeff[(i, j, 0)] = -1  # west
+      stencil_coeff[(i, j, 1)] = -1  # east
+      stencil_coeff[(i, j, 2)] = -1  # south
+      stencil_coeff[(i, j, 3)] = -1  # north
+      stencil_coeff[(i, j, 4)] = -1  # bottom
+      stencil_coeff[(i, j, 5)] = -1  # top
       stencil_coeff[(i, j, 6)] = 6  # center
-
 
   # fabric-offsets = 1,1
   fabric_offset_x = 1
@@ -324,8 +318,8 @@ def main():
   core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
   core_fabric_offset_y = fabric_offset_y
   # (min_fabric_width, min_fabric_height) is the minimal dimension to run the app
-  min_fabric_width = (core_fabric_offset_x + width + 2 + 1 + width_east_buf)
-  min_fabric_height = (core_fabric_offset_y + height + 1)
+  min_fabric_width = core_fabric_offset_x + width + 2 + 1 + width_east_buf
+  min_fabric_height = core_fabric_offset_y + height + 1
 
   fabric_width = 0
   fabric_height = 0
@@ -342,7 +336,7 @@ def main():
   assert fabric_height >= min_fabric_height
 
   # prepare the simulation
-  print('store ELFs and log files in the folder ', dirname)
+  print("store ELFs and log files in the folder ", dirname)
 
   # layout of a rectangle
   code_csl = "layout.csl"
@@ -382,7 +376,7 @@ def main():
       C8,
       channels,
       width_west_buf,
-      width_east_buf
+      width_east_buf,
   )
   if args.compile_only:
     print("COMPILE ONLY: EXIT")
@@ -393,12 +387,12 @@ def main():
   # check if A is symmetric or not
   A_csc = A_csr.tocsc(copy=True)
   A_csc = A_csc.sorted_indices().astype(np.float32)
-  assert 0 == np.linalg.norm(A_csr.indptr - A_csc.indptr, np.inf), "A must be symmetric"
-  assert 0 == np.linalg.norm(A_csr.indices - A_csc.indices, np.inf), "A must be symmetric"
-  assert 0 == np.linalg.norm(A_csr.data - A_csc.data, np.inf), "A must be symmetric"
+  assert np.linalg.norm(A_csr.indptr - A_csc.indptr, np.inf) == 0, "A must be symmetric"
+  assert np.linalg.norm(A_csr.indices - A_csc.indices, np.inf) == 0, "A must be symmetric"
+  assert np.linalg.norm(A_csr.data - A_csc.data, np.inf) == 0, "A must be symmetric"
 
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
-  eps = 1.e-3
+  eps = 1.0e-3
   tol = eps * nrm_b
   print(f"|b| = {nrm_b}")
   print(f"max_ite = {max_ite}")
@@ -421,17 +415,50 @@ def main():
   simulator.load()
   simulator.run()
 
-  print(f"copy vector b and x0")
-  simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+  print("copy vector b and x0")
+  simulator.memcpy_h2d(
+      symbol_b,
+      b_1d,
+      0,
+      0,
+      width,
+      height,
+      zDim,
+      streaming=False,
+      data_type=memcpy_dtype,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=True,
+  )
 
-  simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+  simulator.memcpy_h2d(
+      symbol_x,
+      x_1d,
+      0,
+      0,
+      width,
+      height,
+      zDim,
+      streaming=False,
+      data_type=memcpy_dtype,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=True,
+  )
 
-  print(f"copy 7 stencil coefficients")
+  print("copy 7 stencil coefficients")
   stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
-  simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+  simulator.memcpy_h2d(
+      symbol_stencil_coeff,
+      stencil_coeff_1d,
+      0,
+      0,
+      width,
+      height,
+      7,
+      streaming=False,
+      data_type=memcpy_dtype,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=True,
+  )
 
   print("step 0: enable timer")
   simulator.launch("f_enable_timer", nonblock=False)
@@ -462,12 +489,23 @@ def main():
 
   # [optional] D2H(rho)
   rho_wse = np.zeros(1, np.float32)
-  simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  simulator.memcpy_d2h(
+      rho_wse,
+      symbol_rho,
+      0,
+      0,
+      1,
+      1,
+      1,
+      streaming=False,
+      data_type=memcpy_dtype,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=False,
+  )
   rho = rho_wse[0]
   print(f"[CG] iter {k}: rho = {rho}")
   # if |r_k|_2 < tol, then exit
-  while ( (rho > tol*tol) and (k < max_ite) ):
+  while (rho > tol * tol) and (k < max_ite):
     k = k + 1
     print("step 4.3: update p")
     # if k == 1
@@ -495,11 +533,21 @@ def main():
     simulator.launch("f_update_x_r_rho", nonblock=False)
 
     # [optional] D2H(rho)
-    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    simulator.memcpy_d2h(
+        rho_wse,
+        symbol_rho,
+        0,
+        0,
+        1,
+        1,
+        1,
+        streaming=False,
+        data_type=memcpy_dtype,
+        order=MemcpyOrder.COL_MAJOR,
+        nonblock=False,
+    )
     rho = rho_wse[0]
     print(f"[CG] iter {k}: rho = {rho}")
-
 
   print("step 5: toc() records time_end")
   simulator.launch("f_toc", nonblock=False)
@@ -508,21 +556,54 @@ def main():
   simulator.launch("f_memcpy_timestamps", nonblock=False)
 
   print("step 7: D2H (time_start, time_end)")
-  time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
-  simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
-    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  time_memcpy_hwl_1d = np.zeros(height * width * 6, np.uint32)
+  simulator.memcpy_d2h(
+      time_memcpy_hwl_1d,
+      symbol_time_buf_u16,
+      0,
+      0,
+      width,
+      height,
+      6,
+      streaming=False,
+      data_type=MemcpyDataType.MEMCPY_16BIT,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=False,
+  )
   time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
 
   print("step 8: D2H reference clock")
-  time_ref_1d = np.zeros(height*width*3, np.uint32)
-  simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
-    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  time_ref_1d = np.zeros(height * width * 3, np.uint32)
+  simulator.memcpy_d2h(
+      time_ref_1d,
+      symbol_time_ref,
+      0,
+      0,
+      width,
+      height,
+      3,
+      streaming=False,
+      data_type=MemcpyDataType.MEMCPY_16BIT,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=False,
+  )
   time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
 
   print("step 9: D2H x[zDim]")
-  xf_wse_1d = np.zeros(height*width*zDim, np.float32)
-  simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  xf_wse_1d = np.zeros(height * width * zDim, np.float32)
+  simulator.memcpy_d2h(
+      xf_wse_1d,
+      symbol_x,
+      0,
+      0,
+      width,
+      height,
+      zDim,
+      streaming=False,
+      data_type=memcpy_dtype,
+      order=MemcpyOrder.COL_MAJOR,
+      nonblock=False,
+  )
 
   simulator.stop()
 
@@ -540,7 +621,7 @@ def main():
     if src_trace.exists():
       shutil.move(src_trace, dst_trace)
 
-  timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
+  timing_analysis(height, width, time_memcpy_hwl, time_ref_hwl)
 
   nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
   print(f"|xf|_2 = {nrm2_xf}")
@@ -548,25 +629,16 @@ def main():
   z = xf_1d.ravel() - xf_wse_1d.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|xf_ref - xf_wse| = {nrm_z}")
-  np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
+  np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.0e-5)
   print("\nSUCCESS!")
 
-  vals, vecs = eigs(A_csr, k=1, which='SM')
+  vals, _ = eigs(A_csr, k=1, which="SM")
   min_eig = abs(vals[0])
-  vals, vecs = eigs(A_csr, k=1, which='LM')
+  vals, _ = eigs(A_csr, k=1, which="LM")
   max_eig = abs(vals[0])
   print(f"min(eig) = {min_eig}")
   print(f"max(eig) = {max_eig}")
   print(f"cond(A) = {max_eig/min_eig}")
-
-  if 0:
-    debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
-    print(f"=== dump rho with core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y={core_fabric_offset_y}")
-    for py in range(height):
-      for px in range(width):
-        t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
-        print(f"(py, px) = {py, px}, rho_ij = {t}")
-
 
 if __name__ == "__main__":
   main()

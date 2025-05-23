@@ -1,4 +1,4 @@
-// Copyright 2024 Cerebras Systems.
+// Copyright 2025 Cerebras Systems.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -190,5 +190,5 @@ fn dot(n:i16, x: [*]f32, y: [*]f32) f32 {
     var sum: f32 = @as(f32, 0);
     @map(reduce_dot, mem_x_dsd, mem_y_dsd, &sum, &sum);
 
-    return sum; 
+    return sum;
 }

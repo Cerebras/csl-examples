@@ -8,7 +8,7 @@ are not synchronized in the beginning. To avoid the timing variation among
 those PEs, ``sync()`` synchronizes all PEs and samples the reference clock.
 
 There are two implementations, ``kernel.csl`` and ``kernel_power.csl``
-compiled by ``run.py`` and ``run_power.py`` respectively. Both kernels define
+compiled by ``run.py`` and ``device_run.py`` respectively. Both kernels define
 host-callable functions ``f_sync()``, ``f_tic()`` and ``f_toc()`` in order
 to synchronize the PEs and record the timing.
 
@@ -31,7 +31,7 @@ coefficients can vary per PE, but must be the same for the local vector. The
 user can change the coefficients based on the boundary condition or curvilinear
 coordinate transformation.
 
-The script ``run.py`` or ``run_power.py`` has the following parameters:
+The script ``run.py`` or ``device_run.py`` has the following parameters:
 
 - ``-k=<int>`` specifies the maximum size of local vector.
 
